@@ -40,6 +40,9 @@ import {
 } from './image-utils';
 import { buildFileMessage, uploadFile } from './file-upload';
 import { useAttachmentDraft } from './attachment-draft';
+import { useAttachmentQueue } from './attachment-queue';
+import { readLocal, writeLocal, useComposerDraft } from './personal-state';
+import { ConnectionNotice } from './connection-notice';
 import { useFileTransfer } from './file-transfer';
 import { useFilePreviews } from './file-preview-client';
 import { restoreOwnedTurn } from './owned-turn';
@@ -167,6 +170,7 @@ import type {
   FollowState,
   HistoryPage,
   PendingApprovals,
+  PendingAttachment,
   Session,
   TurnStartResult,
 } from './app-types';
@@ -259,8 +263,16 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   const [olderHistoryAutoLoadEnabled, setOlderHistoryAutoLoadEnabled] = useState(false);
   const [initialHistoryLoaded, setInitialHistoryLoaded] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [prompt, setPrompt] = useState('');
-  const { attachment: pendingAttachment, setAttachment: setPendingAttachment, choose: prepareMessageAttachment, invalidate: invalidateMessageAttachment } = useAttachmentDraft();
+  const [prompt, setPrompt, draftSaved] = useComposerDraft(JSON.stringify([environmentId, threadId || 'new']));
+  const { attachments: pendingAttachments, setAttachments: setPendingAttachments, choose: prepareMessageAttachments, invalidate: invalidateMessageAttachment } = useAttachmentQueue();
+  const pendingAttachment = pendingAttachments[0] || null;
+  const setPendingAttachment = useCallback((value: React.SetStateAction<PendingAttachment | null>) => setPendingAttachments(current => {
+    const next = typeof value === 'function' ? value(current[0] || null) : value; return next ? [next] : [];
+  }), [setPendingAttachments]);
+  const [imageQuality, setImageQuality] = useState<'economy' | 'high'>(() => readLocal('personal.imageQuality', 'economy'));
+  const completedUploadsRef = useRef(new WeakMap<File, { path: string; name: string; size: number; sha256: string }>());
+  const [uploadingLabel, setUploadingLabel] = useState('');
+  const uploadOwnerRef = useRef<string | null>(null);
   const [knownAttachments, setKnownAttachments] = useState<Record<string, KnownAttachment>>(loadKnownAttachments);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<ImageUploadState | null>(null);
@@ -552,6 +564,10 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   const { fileDownload, downloadLocalFile, cancelFileDownload } = useFileTransfer({
     online, request, reportTimelineError, environmentIdRef, selectedRequestRef, connectorOnlineRef, secureChannelRef,
   });
+  const downloadOriginalFile = useCallback(async (path: string) => {
+    try { const original = await request<{ path: string }>('attachment.original', { path }); await downloadLocalFile(original.path); }
+    catch (error) { reportTimelineError(error); }
+  }, [request, downloadLocalFile, reportTimelineError]);
   const { readVisualization, readTextFile, readTurnDiff, readPreviewImage } = useFilePreviews(request, threadId);
 
   const {
@@ -587,7 +603,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     [sessions, threadId],
   );
 
-  const { attachmentUrls, rememberImage, retryImages } = useTimelineImages(
+  const { attachmentUrls, attachmentNames, rememberImage, retryImages } = useTimelineImages(
     `${environmentId}:${threadId}:${selectedRequestRef.current}`, timelineAttachments, online, connectionEpoch, request,
   );
 
@@ -1473,6 +1489,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     }
     cancelFileDownload();
     invalidateMessageAttachment();
+    setPendingAttachments([]);
     selectedRequestRef.current += 1;
     const requestVersion = selectedRequestRef.current;
     setThreadId(nextThreadId);
@@ -1508,7 +1525,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       preloadMessageBubble();
       void loadHistory(nextThreadId, null, requestVersion);
     }
-  }, [cancelFileDownload, invalidateMessageAttachment, loadHistory, resetExecutionPresentation, updateSessionAttention]);
+  }, [cancelFileDownload, invalidateMessageAttachment, loadHistory, resetExecutionPresentation, updateSessionAttention, setPendingAttachments]);
 
   const selectEnvironment = useCallback((value: string) => {
     const nextEnvironmentId = normalizeEnvironmentId(value);
@@ -1722,11 +1739,11 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     )) loadOlder();
   }, [historyLoading, initialHistoryLoaded, loadOlder, nextCursor]);
 
-  const chooseAttachment = useCallback((file?: File) => {
+  const chooseAttachment = useCallback((files: File[] = []) => {
     const selectionVersion = selectedRequestRef.current;
-    return prepareMessageAttachment(file, reportTimelineError,
+    return prepareMessageAttachments(files, reportTimelineError,
       () => selectionVersion === selectedRequestRef.current);
-  }, [prepareMessageAttachment, reportTimelineError]);
+  }, [prepareMessageAttachments, reportTimelineError]);
 
   const chooseNewSessionAttachment = useCallback(async (file?: File) => {
     setNewSessionError('');
@@ -1760,7 +1777,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     storeEnvironmentValue(SESSION_PERMISSION_MODE_KEY, environmentIdRef.current, newSessionPermissionMode);
     selectSession(null);
     setCreatingNewSession(true);
-    setPrompt(text);
+    writeLocal('personal.draft.' + JSON.stringify([environmentIdRef.current, 'new']), text);
     setPendingAttachment(transferredAttachment);
     setNewSessionPrompt('');
     setNewSessionError('');
@@ -1772,7 +1789,8 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     // A question response is independent of the message/attachment draft.
     if (questionReplies && (!threadId || threadId !== threadIdRef.current)) return;
     const text = questionReplies ? buildQuestionReply(questionReplies) : prompt.trim();
-    const attachment = questionReplies ? null : pendingAttachment;
+    const attachments = questionReplies ? [] : pendingAttachments;
+    const attachment = attachments[0] || null;
     const targetThreadId = threadIdRef.current;
     const sendKey = JSON.stringify([environmentIdRef.current, targetThreadId || NEW_TURN_KEY]);
     const steering = canSteerOwnedTurn(
@@ -1810,59 +1828,47 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     let turnText = text;
     let visibleText = questionReplies ? questionReplyText(questionReplies) : text;
     let timelineAttachment: ImageAttachment | undefined;
-    let nativeImage: { path: string } | undefined;
-    let uploadedPreviewUrl = '';
+    const nativeImages: Array<{ path: string }> = [];
+    const gallery: ImageAttachment[] = [];
+    const boundPaths: string[] = [];
+    const optimisticExtraIds: string[] = [];
     let optimisticItemId = '';
     let composerCleared = false;
     if (attachment) {
+      uploadOwnerRef.current = delivery.id;
       setUploading(true);
       setUploadProgress({ phase: 'preparing', percent: 0 });
     }
     try {
-      if (attachment?.kind === 'file') {
-        const uploaded = await uploadFile(attachment.file, request, setUploadProgress, () => isCurrentSessionRequest(
-          targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current,
-        ));
-        const message = buildFileMessage(text, uploaded);
-        turnText = message.turnText;
-        visibleText = message.visibleText;
-      } else if (attachment) {
-        const encoded = await fileToBase64(attachment.file);
-        const previewEncoded = attachment.transferPreview ? await fileToBase64(attachment.transferPreview) : '';
-        if (!isCurrentSessionRequest(
-          targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current,
-        )) {
-          setUploading(false);
-          return;
+      const fileTexts: string[] = [], imageTexts: string[] = [];
+      for (const [index, item] of attachments.entries()) {
+        setUploadingLabel(`${index + 1}/${attachments.length} · ${item.file.name}`);
+        const isCurrent = () => isCurrentSessionRequest(targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current);
+        let original = completedUploadsRef.current.get(item.file);
+        if (!original) {
+          original = await uploadFile(item.file, request, setUploadProgress, isCurrent);
+          completedUploadsRef.current.set(item.file, original);
         }
-        setUploadProgress({ phase: 'sending', percent: 0 });
-        const uploaded = await request<UploadedImage>('attachment.upload', {
-          name: attachment.file.name,
-          mimeType: attachment.file.type,
-          size: attachment.file.size,
-          data: encoded,
-          preview: attachment.transferPreview ? {
-            mimeType: attachment.transferPreview.type,
-            size: attachment.transferPreview.size,
-            data: previewEncoded,
-          } : undefined,
-        }, { onUploadProgress: ({ sentBytes, totalBytes }) => {
-          if (!isCurrentSessionRequest(targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current)) return;
-          const percent = Math.min(100, Math.floor(sentBytes / totalBytes * 100));
-          setUploadProgress({ phase: sentBytes === totalBytes ? 'confirming' : 'sending', percent });
-        } });
-        const imageMessage = buildImageMessage(text, uploaded);
-        turnText = imageMessage.turnText;
-        visibleText = imageMessage.visibleText;
-        if (isExistingSession && !steering && connectorStatus?.capabilities.desktopNativeImages) {
-          nativeImage = { path: uploaded.path };
-          turnText = text || t('请查看这张图片。', 'Please inspect this image.');
-          visibleText = turnText;
+        if (!isCurrent()) return;
+        boundPaths.push(original.path);
+        if (item.kind === 'file') {
+          fileTexts.push(buildFileMessage('', original).visibleText.replace(/^.*?\n\n/, ''));
+        } else {
+          const uploaded = await request<UploadedImage>('attachment.prepare', { path: original.path, name: item.file.name, quality: imageQuality });
+          if (!isCurrent()) return;
+          boundPaths.push(uploaded.path);
+          gallery.push({ path: uploaded.path, name: uploaded.name });
+          nativeImages.push({ path: uploaded.path });
+          imageTexts.push(buildImageMessage(text, uploaded).turnText);
+          if (item.transferPreview) rememberImage(uploaded.path, `data:${item.transferPreview.type};base64,${await fileToBase64(item.transferPreview)}`);
         }
-        timelineAttachment = { path: uploaded.path, name: uploaded.name };
-        uploadedPreviewUrl = attachment.transferPreview
-          ? `data:${attachment.transferPreview.type};base64,${previewEncoded}`
-          : `data:${uploaded.mimeType};base64,${encoded}`;
+      }
+      if (attachments.length) {
+        visibleText = [text || t('请查看这些附件。', 'Please inspect these attachments.'), ...fileTexts].join('\n\n');
+        const native = isExistingSession && !steering && connectorStatus?.capabilities.desktopNativeImages;
+        turnText = native ? visibleText : [...imageTexts, visibleText].join('\n\n');
+        if (!native) nativeImages.length = 0;
+        timelineAttachment = gallery[0];
       }
       if (!isCurrentSessionRequest(
         targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current,
@@ -1872,15 +1878,15 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       }
       if (attachment && timelineAttachment) {
         if (targetThreadId) rememberAttachment(targetThreadId, visibleText, timelineAttachment);
-        rememberImage(timelineAttachment.path, uploadedPreviewUrl);
       }
-      setUploading(false);
+      if (uploadOwnerRef.current === delivery.id) { setUploading(false); uploadOwnerRef.current = null; }
       if (!questionReplies) {
         setPrompt('');
         setPendingAttachment(null);
         composerCleared = true;
       }
       optimisticItemId = addTimeline('user', visibleText, true, true, timelineAttachment);
+      for (const image of gallery.slice(1)) optimisticExtraIds.push(addTimeline('user', '', true, true, image));
       if (questionReplies) setTimeline((current) => current.map((item) => item.id === optimisticItemId
         ? { ...item, questionReplies } : item));
       streamItemRef.current = null;
@@ -1903,7 +1909,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       const action = steering ? 'turn.steer' : 'turn.start';
       const data = await request<TurnStartResult>(action, {
         text: turnText,
-        ...(nativeImage ? { image: nativeImage } : {}),
+        ...(nativeImages.length ? { images: nativeImages } : {}),
         threadId: targetThreadId,
         ...(steering ? {} : {
           cwd: isExistingSession ? '' : projectCwd,
@@ -1917,6 +1923,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       if (environmentIdRef.current !== delivery.environmentId) return;
       if (optimisticItemId) {
         setTimeline((current) => acknowledgeOptimisticUser(current, optimisticItemId, sentAt));
+        for (const id of optimisticExtraIds) setTimeline(current => acknowledgeOptimisticUser(current, id, sentAt));
       }
       const receipt = confirmedDelivery(delivery, data.threadId);
       const selectionStillCurrent = isCurrentSessionRequest(
@@ -1924,6 +1931,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       ) || Boolean(visibleDelivery(receipt, environmentIdRef.current, threadIdRef.current, selectedRequestRef.current));
       if (selectionStillCurrent) setMessageDelivery(receipt);
       if (data.threadId) {
+        if (boundPaths.length) void request('attachment.bind', { threadId: data.threadId, paths: boundPaths }).catch(() => reportTimelineError(new Error('附件已保存，但会话关联未完成；原文件仍保留在本机。')));
         if (!isExistingSession) {
           const createdSession = {
             id: data.threadId,
@@ -1975,7 +1983,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       return true;
     } catch (error) {
       setMessageDelivery((current) => current?.id === delivery.id ? { ...current, status: 'unconfirmed' } : current);
-      setUploading(false);
+      if (uploadOwnerRef.current === delivery.id) { setUploading(false); uploadOwnerRef.current = null; }
       const selectionStillCurrent = isCurrentSessionRequest(
         targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current,
       );
@@ -1989,16 +1997,11 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         resetExecution();
       }
       if (optimisticItemId) {
-        setTimeline((current) => current.filter((item) => item.id !== optimisticItemId));
+        setTimeline((current) => current.filter((item) => item.id !== optimisticItemId && !optimisticExtraIds.includes(item.id)));
       }
       if (composerCleared) {
         setPrompt((current) => current.trim() ? current : text);
-        if (attachment) setPendingAttachment((current) => current || {
-          kind: attachment.kind,
-          file: attachment.file,
-          transferPreview: attachment.transferPreview,
-          previewUrl: attachment.kind === 'image' ? URL.createObjectURL(attachment.file) : '',
-        });
+        if (attachment) setPendingAttachments(current => current.length ? current : attachments.map(item => ({ ...item, previewUrl: item.kind === 'image' ? URL.createObjectURL(item.file) : '' })));
       }
       if (error instanceof Error && error.message === 'turn_cancelled') {
         return;
@@ -2012,10 +2015,10 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       reportTimelineError(error);
     } finally {
       sendingRef.current.delete(sendKey);
-      if (attachment) setUploadProgress(null);
+      if (uploadOwnerRef.current === delivery.id) { uploadOwnerRef.current = null; setUploading(false); setUploadingLabel(''); setUploadProgress(null); }
     }
   }, [
-    addTimeline, connectorStatus, executionState, modelConfig, newSessionCwd, ownedTurnThreadId, pendingAttachment,
+    addTimeline, connectorStatus, executionState, modelConfig, newSessionCwd, ownedTurnThreadId, pendingAttachments, imageQuality,
     permissionConfig, prompt, threadId,
     loadHistory, refreshSessions, rememberAttachment, rememberImage, reportTimelineError, request, resetExecution, running,
     updateExecution, updateSessionAttention, uploading,
@@ -2553,13 +2556,14 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
           resolvedQuestionAnswers={resolvedQuestionAnswers}
           knownAttachments={knownAttachments}
           attachmentUrls={attachmentUrls}
+          attachmentNames={attachmentNames}
           onRetryImages={retryImages}
           executionActive={executionActive}
           progressAnimationReady={followState !== 'checking'}
           liveProgressItemId={liveProgressItemId}
           onScroll={handleMessageScroll}
           onLoadOlder={loadOlder}
-          onDownloadFile={downloadLocalFile}
+          onDownloadFile={downloadOriginalFile}
           onReadTextFile={readTextFile}
           onReadTurnDiff={readTurnDiff}
           onReadVisualization={readVisualization}
@@ -2610,51 +2614,61 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         )}
 
         {(threadId || creatingNewSession) && <footer className="composer-wrap">
-          {pendingAttachment && (
-            <div className="image-preview">
-              {pendingAttachment.kind === 'image' ? <img src={pendingAttachment.previewUrl} alt={t('待发送图片预览', 'Image ready to send')} /> : <span className="attachment-file-icon" aria-hidden="true">▤</span>}
+          <ConnectionNotice relayConnected={socketAuthenticatedRef.current} connectorConnected={online} desktop={connectorStatus?.mode === 'desktop'} desktopOnline={connectorStatus?.desktopOnline} />
+          {!draftSaved && prompt && <p className="connection-notice" role="status">{t('当前浏览器无法保存草稿，请先复制文字再刷新。', 'This browser cannot save the draft. Copy your text before refreshing.')}</p>}
+          {!!pendingAttachments.length && <div className="attachment-controls">
+            <span>{pendingAttachments.length}/6 {t('个附件', 'attachments')}</span>
+            {pendingAttachments.some(item => item.kind === 'image') && <label>{t('交给模型的图片', 'Model image')} <select aria-label={t('图片清晰度', 'Image quality')} value={imageQuality} disabled={uploading}
+              onChange={event => { const next = event.target.value === 'high' ? 'high' : 'economy'; setImageQuality(next); writeLocal('personal.imageQuality', next); }}>
+              <option value="economy">{t('省流', 'Compact')}</option><option value="high">{t('原图', 'Original')}</option></select></label>}
+            <small>{t('原文件始终保留在本机，首次上传仍传原文件。', 'Originals stay on your computer; the first upload transfers the original.')}</small>
+          </div>}
+          {!!pendingAttachments.length && <div className="attachment-queue">{pendingAttachments.map((item, index) => (
+            <div className="image-preview" key={item.previewUrl || `${index}:${item.file.name}`}>
+              {item.kind === 'image' ? <img src={item.previewUrl} alt={t('待发送图片预览', 'Image ready to send')} /> : <span className="attachment-file-icon" aria-hidden="true">▤</span>}
               <div className="image-preview-details">
-                <strong>{pendingAttachment.file.name}</strong><small>{formatBytes(pendingAttachment.file.size)}</small>
-                {uploading && uploadProgress && <ImageUploadProgress state={uploadProgress} kind={pendingAttachment.kind} />}
+                <strong>{item.file.name}</strong><small>{formatBytes(item.file.size)}</small>
               </div>
               <button
                 type="button"
-                onClick={() => setPendingAttachment(null)}
+                onClick={() => setPendingAttachments(items => items.filter((_, i) => i !== index))}
                 disabled={uploading || running}
-                aria-label={t('移除附件', 'Remove attachment')}
+                aria-label={`${t('移除附件', 'Remove attachment')} ${index + 1}`}
               >×</button>
             </div>
-          )}
+          ))}</div>}
+          {uploading && uploadProgress && <div className="queue-progress" role="status"><span>{uploadingLabel}</span><ImageUploadProgress state={uploadProgress} kind={pendingAttachment?.kind || 'file'} /></div>}
           <div className="composer">
             <input
               ref={attachmentInputRef}
               className="image-input"
               type="file"
+              multiple
               aria-label={t('选择附件', 'Choose attachment')}
               onChange={(event) => {
-                const file = event.target.files?.[0];
+                const files = Array.from(event.target.files || []);
                 event.target.value = '';
-                void chooseAttachment(file);
+                void chooseAttachment(files);
               }}
-              disabled={!online || running || uploading}
+              disabled={running || uploading}
             />
             <button
               className="attach-button"
               type="button"
               onClick={() => attachmentInputRef.current?.click()}
-              disabled={!online || running || uploading}
+              disabled={running || uploading}
               aria-label={t('添加附件', 'Add attachment')}
-              title={t('添加附件（单个文件最大 100 MB）', 'Add attachment (up to 100 MB per file)')}
+              title={t('最多 6 个附件，图片最大 32 MB，其他文件最大 100 MB', 'Up to 6 attachments; images 32 MB, other files 100 MB')}
             >＋</button>
             <textarea
               rows={1}
               value={prompt}
               onPaste={(event) => {
-                if (!online || running || uploading) return;
+                if (running || uploading) return;
                 const file = getClipboardImage(event.clipboardData);
                 if (!file) return;
                 event.preventDefault();
-                void chooseAttachment(file);
+                void chooseAttachment([file]);
               }}
               onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2667,7 +2681,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
                   : directDesktopDeliveryAvailable
                     ? t('直接发送到当前任务…', 'Send to the current run…')
                   : online ? t('发送给当前 Codex…', 'Send to the current Codex…') : t('当前执行环境离线', 'Current environment is offline')}
-              disabled={!online || uploading}
+              disabled={uploading}
             />
             <div className="composer-actions">
               <button

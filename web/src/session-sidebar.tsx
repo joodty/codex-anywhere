@@ -8,6 +8,7 @@ import {
 } from './app-utils';
 import type { ExecutionState, Session } from './app-types';
 import { t } from './i18n';
+import { readLocal, writeLocal } from './personal-state';
 import { SidebarIcon } from './ui-components';
 import { EnvironmentSwitcher } from './environment-switcher';
 import type { EnvironmentLabels } from './execution-environments';
@@ -57,12 +58,13 @@ export const SessionSidebar = memo(function SessionSidebar({
   onClose,
   onSelect,
 }: SessionSidebarProps) {
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const selectedSession = sessions.find(session => session.id === selectedThreadId);
   const selectedProject = selectedSession && (selectedSession.project?.id || (selectedSession.desktopCatalogAvailable ? 'unassigned' : selectedSession.cwd || 'unassigned'));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([...readLocal<string[]>('personal.projects.' + environmentId, []), ...(selectedProject ? [selectedProject] : [])]));
+  useEffect(() => { setExpanded(new Set(readLocal<string[]>('personal.projects.' + environmentId, []))); }, [environmentId]);
   useEffect(() => {
-    if (selectedProject) setExpanded(current => new Set([...current, selectedProject]));
-  }, [selectedProject]);
+    if (selectedProject) setExpanded(current => { const next = new Set([...current, selectedProject]); writeLocal('personal.projects.' + environmentId, [...next]); return next; });
+  }, [selectedProject, environmentId]);
   const visibleSessions = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     const matches = query
@@ -139,7 +141,7 @@ export const SessionSidebar = memo(function SessionSidebar({
           <button type="button" className="project-group-heading" title={group.path}
             aria-expanded={search.trim() ? true : expanded.has(group.id)}
             onClick={() => setExpanded(current => {
-              const next = new Set(current); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); return next;
+              const next = new Set(current); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); writeLocal('personal.projects.' + environmentId, [...next]); return next;
             })}>
             <span className="project-chevron" aria-hidden="true">{!search.trim() && !expanded.has(group.id) ? '›' : '⌄'}</span>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 7V5a1 1 0 0 1 1-1h6l2 3h8a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7z" /></svg>

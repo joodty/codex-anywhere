@@ -1,6 +1,6 @@
 import { open } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { userImageAttachment } from '../shared/user-image.js';
+import { userImageAttachments } from '../shared/user-image.js';
 import type { FileHandle } from 'node:fs/promises';
 import {
   normalizeToolPurpose, parseAssistantMessage, parseInjectedUserMessage, parseUserMessage,
@@ -1210,10 +1210,12 @@ function mapRolloutRowsWithState(
       });
     } else if (row?.type === 'response_item' && payloadType === 'message') {
       if (payload.role === 'user') {
+        const images = userImageAttachments(payload.content);
         pushText(items, {
           type: 'userMessage', ...parseUserMessage(extractContent(payload.content)), ...turn, ...timing,
-          attachment: userImageAttachment(payload.content),
+          attachment: images[0],
         });
+        for (const attachment of images.slice(1)) pushText(items, { type: 'userMessage', text: '', attachment, ...turn, ...timing });
       } else if (payload.role === 'assistant') {
         const content = parseAssistantMessage(extractContent(payload.content));
         if (payload.phase === 'final_answer') flushToolSummary(turn, timing);

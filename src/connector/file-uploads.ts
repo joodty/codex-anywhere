@@ -1,14 +1,12 @@
 import { createHash, randomUUID, type Hash } from 'node:crypto';
 import { lstat, mkdir, open, rename, unlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { MAX_UPLOAD_BYTES, UPLOAD_CHUNK_BYTES, safeUploadName } from '../shared/file-upload.js';
-import { cleanupAttachments } from './attachment-cleanup.js';
+import { FILE_DIRECTORY } from './retained-files.js';
 import { fileSnapshot, sameFileSnapshot, type FileSnapshot } from './bounded-file.js';
 
-export const UPLOAD_DIRECTORY = join(tmpdir(), 'personal-codex-bridge', 'files');
+export const UPLOAD_DIRECTORY = FILE_DIRECTORY;
 const UPLOAD_TTL_MS = 30 * 60_000;
-const FILE_TTL_MS = 24 * 60 * 60_000;
 type Upload = {
   owner: string; path: string; name: string; size: number; offset: number;
   hash: Hash; touchedAt: number; busy: boolean;
@@ -52,7 +50,6 @@ export class FileUploadManager {
       await mkdir(this.directory, { recursive: true, mode: 0o700 });
       const stats = await lstat(this.directory);
       if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error('attachment_directory_invalid');
-      await cleanupAttachments(this.directory, this.now(), FILE_TTL_MS);
       await writeFile(upload.path, '', { flag: 'wx', mode: 0o600 });
       upload.snapshot = fileSnapshot(await lstat(upload.path));
       upload.busy = false;
@@ -111,6 +108,13 @@ export class FileUploadManager {
       await unlink(upload.path).catch(() => {});
       throw error;
     } finally { upload.busy = false; }
+  }
+
+  async status(payload: Payload, owner = '') {
+    const upload = this.get(payload, owner);
+    await this.checkSnapshot(upload);
+    upload.touchedAt = this.now();
+    return { nextOffset: upload.offset, size: upload.size };
   }
 
   async complete(payload: Payload, owner = '') {

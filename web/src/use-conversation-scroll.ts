@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 import { ConversationScroll } from './conversation-scroll';
+import { readLocal, writeLocal } from './personal-state';
 
 export function useConversationScroll(
   rootRef: RefObject<HTMLDivElement | null>, contentRef: RefObject<HTMLDivElement | null>,
@@ -7,16 +8,36 @@ export function useConversationScroll(
 ) {
   const controllerRef = useRef<ConversationScroll | null>(null);
   const controller = controllerRef.current ??= new ConversationScroll();
-  useLayoutEffect(() => { controller.reset(); }, [controller, scope]);
+  const restoreRef = useRef<{ scope: string; id: string; offset: number } | null>(null);
+  useLayoutEffect(() => { controller.reset(); const saved = readLocal<{ id: string; offset: number } | null>('personal.scroll.' + scope, null);
+    restoreRef.current = saved && typeof saved.id === 'string' && Number.isFinite(saved.offset) ? { ...saved, scope } : null;
+  }, [controller, scope]);
   // Correct React updates before paint; ResizeObserver covers deferred images,
   // diagrams and composer resizing without a second, stale animation-frame jump.
   useLayoutEffect(() => {
-    if (rootRef.current) controller.restore(rootRef.current);
+    const root = rootRef.current;
+    if (!root) return;
+    const saved = restoreRef.current;
+    if (saved?.scope === scope) {
+      const anchor = [...root.querySelectorAll<HTMLElement>('[data-timeline-id]')].find(node => node.dataset.timelineId === saved.id);
+      if (anchor) { root.scrollTop += anchor.getBoundingClientRect().top - root.getBoundingClientRect().top - saved.offset; controller.pause(root); restoreRef.current = null; }
+    }
+    controller.restore(root);
   });
   useEffect(() => {
     const root = rootRef.current;
     const content = contentRef.current;
     if (!root || !content) return undefined;
+    let lastSaved = 0;
+    const save = () => {
+      if (Date.now() - lastSaved < 80 || root.clientHeight <= 0) return;
+      const top = root.getBoundingClientRect().top;
+      const anchor = [...root.querySelectorAll<HTMLElement>('[data-timeline-id]')].find(node => node.getBoundingClientRect().bottom > top);
+      if (!anchor) return;
+      lastSaved = Date.now();
+      writeLocal('personal.scroll.' + scope, controller.following ? null : { id: anchor.dataset.timelineId, offset: anchor.getBoundingClientRect().top - top });
+    };
+    root.addEventListener('scroll', save, { passive: true });
     const pauseOnWheel = (event: WheelEvent) => { if (event.deltaY < 0) controller.pause(root); };
     const pauseOnKey = (event: KeyboardEvent) => {
       if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) controller.pause(root);
@@ -48,6 +69,7 @@ export function useConversationScroll(
     window.addEventListener('pageshow', pageShow);
     visibility();
     return () => {
+      root.removeEventListener('scroll', save);
       observer?.disconnect();
       root.removeEventListener('wheel', pauseOnWheel);
       root.removeEventListener('keydown', pauseOnKey);

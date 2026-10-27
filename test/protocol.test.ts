@@ -269,7 +269,7 @@ test('late visualization responses cannot replace the currently selected artifac
   assert.equal(visualizationRequestIsCurrent(3, 3, 'first.html', 'second.html'), false);
 });
 
-test('session sidebar sorts recent sessions and renders current execution state independently', () => {
+test('project sidebar keeps the current task expanded and renders its execution state independently', () => {
   const markup = renderToStaticMarkup(createElement(SessionSidebar, {
     open: true,
     environmentId: 'ecs',
@@ -291,7 +291,9 @@ test('session sidebar sorts recent sessions and renders current execution state 
     onClose: () => {},
     onSelect: () => {},
   }));
-  assert.ok(markup.indexOf('Current task') < markup.indexOf('Older task'));
+  assert.ok(markup.includes('Current task'));
+  assert.ok(markup.indexOf('>beta<') < markup.indexOf('>alpha<'));
+  assert.ok(!markup.includes('Older task'), 'other projects stay collapsed until expanded or searched');
   assert.match(markup, /session-card active running/);
   assert.match(markup, />beta</);
   assert.match(markup, /environment-shortcuts/);
@@ -1508,10 +1510,10 @@ test('message metadata stays in a fixed sibling row outside the bubble', async (
   assert.match(stylesSource, /\.message-meta\s*\{[\s\S]*?height:\s*18px;[\s\S]*?flex:\s*0 0 18px;/);
   assert.doesNotMatch(stylesSource, /\.message-meta\s*\{[^}]*position:\s*absolute;/);
   assert.match(stylesSource, /&\.user::before,\s*&\.assistant::before/);
-  assert.match(stylesSource, /&\.user\s*\{[\s\S]*?border-radius:\s*18px 18px 5px 18px;/);
-  assert.match(stylesSource, /&\.assistant\s*\{[\s\S]*?border-radius:\s*18px 18px 18px 5px;/);
-  assert.match(stylesSource, /--bubble-tail-color:\s*#2b55a3;[\s\S]*?var\(--bubble-tail-color\) 82%/);
-  assert.match(stylesSource, /--bubble-tail-color:\s*#131925;[\s\S]*?color:\s*#c8d1df;[\s\S]*?background:\s*var\(--bubble-tail-color\);/);
+  assert.match(stylesSource, /&\.user\s*\{[\s\S]*?border-radius:\s*18px;/);
+  assert.match(stylesSource, /&\.assistant\s*\{[\s\S]*?border-radius:\s*0;/);
+  assert.match(stylesSource, /--bubble-tail-color:\s*#303030;/);
+  assert.match(stylesSource, /&\.assistant\s*\{[\s\S]*?background:\s*transparent;/);
   assert.doesNotMatch(stylesSource, /&\.assistant\s*\{[^}]*border:\s*1px/);
   assert.match(stylesSource, /&\.user::before,\s*&\.assistant::before\s*\{[\s\S]*?background:\s*var\(--bubble-tail-color\);/);
   assert.match(stylesSource, /\.message-list-content\s*>\s*:last-child\s*\{\s*margin-bottom:\s*0;/);

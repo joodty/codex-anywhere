@@ -19,6 +19,7 @@ import { MessageMarkdown } from './message-markdown';
 import { QuestionReplyContent } from './question-reply-content';
 import { elapsedLabel } from './live-activity';
 import { t } from './i18n';
+import { ImageViewer, type GalleryImage } from './image-viewer';
 import type { TimelineItem } from './history-utils';
 import type { TextPreviewDocument, TurnDiffDocument } from './app-types';
 import type { ContextCompaction } from '../../src/shared/context-compaction';
@@ -32,11 +33,12 @@ export type MessageBubbleProps = {
   item: TimelineItem;
   active?: boolean;
   imageSource?: string;
+  imageGallery?: GalleryImage[];
   onDownloadFile: (path: string) => void;
   onReadTextFile?: (path: string) => Promise<TextPreviewDocument>;
   onReadTurnDiff?: (turnId: string) => Promise<TurnDiffDocument>;
   onReadVisualization: (path: string) => Promise<string>;
-  onReadPreviewImage?: (path: string) => Promise<string>;
+  onReadPreviewImage?: (path: string, quality?: 'high') => Promise<string>;
 };
 
 type FilePreviewState = {
@@ -343,6 +345,7 @@ function MessageBubbleComponent({
   item,
   active = false,
   imageSource,
+  imageGallery,
   onDownloadFile,
   onReadTextFile,
   onReadTurnDiff,
@@ -607,23 +610,8 @@ function MessageBubbleComponent({
           </section>
         )}
         {imageExpanded && imageSource && item.attachment && (
-          <div
-            className="image-lightbox"
-            role="dialog"
-            aria-modal="true"
-            aria-label={t('图片预览', 'Image preview')}
-            onClick={() => setImageExpanded(false)}
-          >
-            <button
-              className="image-lightbox-close"
-              type="button"
-              onClick={() => setImageExpanded(false)}
-              aria-label={t('关闭图片预览', 'Close image preview')}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
-            </button>
-            <img src={imageSource} alt={item.attachment.name} onClick={(event) => event.stopPropagation()} />
-          </div>
+          <ImageViewer initialPath={item.attachment.path} images={imageGallery?.length ? imageGallery : [{ ...item.attachment, url: imageSource }]}
+            load={onReadPreviewImage} download={onDownloadFile} close={() => setImageExpanded(false)} />
         )}
         {visualizationOpen && visualizationSource && item.visualization && (
           <div
@@ -802,6 +790,7 @@ function messageBubblePropsEqual(left: MessageBubbleProps, right: MessageBubbleP
     && left.editDisabled === right.editDisabled
     && left.active === right.active
     && left.imageSource === right.imageSource
+    && left.imageGallery === right.imageGallery
     && left.onDownloadFile === right.onDownloadFile
     && left.onReadTextFile === right.onReadTextFile
     && left.onReadTurnDiff === right.onReadTurnDiff

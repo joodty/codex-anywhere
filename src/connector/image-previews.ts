@@ -23,10 +23,12 @@ export async function readRasterImagePreview({
   path: requestedValue,
   allowedRoots,
   errorPrefix,
+  highQuality = false,
 }: {
   path: unknown;
   allowedRoots: string[] | null;
   errorPrefix: string;
+  highQuality?: boolean;
 }) {
   const requested = String(requestedValue || '');
   if (!isAbsolute(requested)) throw new Error(`${errorPrefix}_path_invalid`);
@@ -54,7 +56,7 @@ export async function readRasterImagePreview({
   try {
     const stats = await handle.stat();
     if (!sameFileSnapshot(fileSnapshot(candidateStats), fileSnapshot(stats))) throw new Error(`${errorPrefix}_file_changed`);
-    cacheKey = `${path}\0${JSON.stringify(fileSnapshot(stats))}`;
+    cacheKey = `${path}\0${highQuality}\0${JSON.stringify(fileSnapshot(stats))}`;
     const cached = previewCache.get(cacheKey);
     if (cached) return { path: requestedPath, ...cached };
     original = await readBoundedFile(handle, MAX_IMAGE_BYTES, errorPrefix, stats);
@@ -63,9 +65,10 @@ export async function readRasterImagePreview({
   if (!detected || !RASTER_IMAGE_TYPES.has(detected.mime)) {
     throw new Error(`${errorPrefix}_content_mismatch`);
   }
-  let preview = await makePreview(original, 720, 72);
-  if (preview.length > MAX_PREVIEW_BYTES) preview = await makePreview(original, 480, 58);
-  if (!preview.length || preview.length > MAX_PREVIEW_BYTES) {
+  const maximum = highQuality ? 2 * 1024 * 1024 : MAX_PREVIEW_BYTES;
+  let preview = await makePreview(original, highQuality ? 2560 : 720, highQuality ? 90 : 72);
+  if (preview.length > maximum) preview = await makePreview(original, highQuality ? 1920 : 480, highQuality ? 80 : 58);
+  if (!preview.length || preview.length > maximum) {
     throw new Error(`${errorPrefix}_preview_too_large`);
   }
 

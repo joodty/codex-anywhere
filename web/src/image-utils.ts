@@ -1,6 +1,6 @@
 import { t } from './i18n';
 
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 512 * 1024;
 const ACCEPTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -30,6 +30,7 @@ export function isValidImagePayload(mimeType: string, data: string) {
 
 export async function prepareImageFile(file: File): Promise<{ file: File; preview?: File }> {
   if (!ACCEPTED_IMAGE_TYPES.has(file.type)) throw new Error('attachment_type_not_allowed');
+  if (file.size > MAX_IMAGE_BYTES) throw new Error('attachment_too_large');
   if (typeof createImageBitmap !== 'function') {
     if (file.size > MAX_IMAGE_BYTES) throw new Error('attachment_too_large');
     return { file };
@@ -38,14 +39,6 @@ export async function prepareImageFile(file: File): Promise<{ file: File; previe
   const bitmap = await createImageBitmap(file);
   try {
     const baseName = file.name.replace(/\.[^.]+$/, '').slice(0, 100) || 'image';
-    let uploadFile = file;
-    if (file.size > MAX_IMAGE_BYTES) {
-      const canvas = drawScaledImage(bitmap, 2048);
-      let blob = await canvasToBlob(canvas, 0.84);
-      if (blob.size > MAX_IMAGE_BYTES) blob = await canvasToBlob(canvas, 0.68);
-      if (blob.size > MAX_IMAGE_BYTES) throw new Error('attachment_too_large');
-      uploadFile = new File([blob], `${baseName}.jpg`, { type: 'image/jpeg', lastModified: file.lastModified });
-    }
 
     let previewBlob = await canvasToBlob(drawScaledImage(bitmap, 720), 0.72);
     if (previewBlob.size > MAX_PREVIEW_BYTES) {
@@ -54,7 +47,7 @@ export async function prepareImageFile(file: File): Promise<{ file: File; previe
     const preview = previewBlob.size <= MAX_PREVIEW_BYTES
       ? new File([previewBlob], `${baseName}.preview.jpg`, { type: 'image/jpeg', lastModified: file.lastModified })
       : undefined;
-    return { file: uploadFile, preview };
+    return { file, preview };
   } finally {
     bitmap.close();
   }

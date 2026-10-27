@@ -1,17 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, unlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { copyFile, lstat, mkdir, open, unlink, writeFile } from 'node:fs/promises';
+import sharp from 'sharp';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileTypeFromBuffer } from 'file-type';
 import { readGeneratedImagePreview } from './generated-images.js';
 import { readRasterImagePreview } from './image-previews.js';
 import { fileSnapshot, readBoundedFile, sameFileSnapshot } from './bounded-file.js';
-import { ATTACHMENT_MAX_AGE_MS, cleanupAttachments } from './attachment-cleanup.js';
+import { cleanupAttachments } from './attachment-cleanup.js';
+import { FILE_DIRECTORY, IMAGE_DIRECTORY, LEGACY_IMAGE_DIRECTORY, managedFile, originalRetainedFile, retainedPath } from './retained-files.js';
 export { cleanupAttachments } from './attachment-cleanup.js';
 
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 512 * 1024;
-const DEFAULT_ATTACHMENT_DIRECTORY = join(tmpdir(), 'personal-codex-bridge', 'attachments');
+const DEFAULT_ATTACHMENT_DIRECTORY = IMAGE_DIRECTORY;
 
 const IMAGE_EXTENSIONS = new Map([
   ['image/jpeg', '.jpg'],
@@ -28,6 +29,7 @@ type ImagePayload = {
   path?: unknown;
   source?: unknown;
   preview?: ImagePayload;
+  quality?: unknown;
 };
 
 type AttachmentOptions = {
@@ -43,7 +45,7 @@ export async function saveImageAttachment(payload: ImagePayload, options: Attach
 
   const directory = resolve(options.directory || DEFAULT_ATTACHMENT_DIRECTORY);
   await ensureSafeDirectory(directory);
-  await cleanupAttachments(directory, options.now || Date.now(), options.maxAgeMs || ATTACHMENT_MAX_AGE_MS);
+  if (options.maxAgeMs) await cleanupAttachments(directory, options.now || Date.now(), options.maxAgeMs);
 
   const path = join(directory, `${randomUUID()}${original.extension}`);
   if (dirname(resolve(path)) !== directory) throw new Error('attachment_path_invalid');
@@ -66,19 +68,26 @@ export async function saveImageAttachment(payload: ImagePayload, options: Attach
 }
 
 export async function readImageAttachment(payload: ImagePayload, options: AttachmentOptions = {}) {
+  const resolved = await retainedPath(payload.path);
+  if (payload.quality === 'high') {
+    const original = await originalRetainedFile(resolved);
+    return readRasterImagePreview({ path: original.path, allowedRoots: payload.source === 'local' ? null : [IMAGE_DIRECTORY, FILE_DIRECTORY, LEGACY_IMAGE_DIRECTORY], errorPrefix: 'attachment', highQuality: true });
+  }
   if (payload?.source === 'generated') {
     return readGeneratedImagePreview(payload, { directory: options.generatedDirectory });
   }
   if (payload?.source === 'local') {
-    return readRasterImagePreview({
-      path: payload.path,
+    const preview = await readRasterImagePreview({
+      path: resolved,
       allowedRoots: null,
       errorPrefix: 'local_image',
     });
+    const original = await originalRetainedFile(resolved);
+    return { ...preview, ...(original.name ? { name: original.name } : {}) };
   }
   const directory = resolve(options.directory || DEFAULT_ATTACHMENT_DIRECTORY);
   await ensureSafeDirectory(directory);
-  const path = resolve(String(payload?.path || ''));
+  const path = resolved;
   if (dirname(path) !== directory) throw new Error('attachment_path_not_allowed');
 
   const candidate = await readablePreviewPath(path);
@@ -98,8 +107,10 @@ export async function readImageAttachment(payload: ImagePayload, options: Attach
   } finally { await handle.close(); }
   const detected = await detectImageType(bytes);
   if (!detected) throw new Error('attachment_content_mismatch');
+  const original = await originalRetainedFile(path);
   return {
     path,
+    ...(original.name ? { name: original.name } : {}),
     mimeType: detected.mimeType,
     size: bytes.length,
     data: bytes.toString('base64'),
@@ -110,7 +121,7 @@ export async function readImageAttachment(payload: ImagePayload, options: Attach
 export async function resolveNativeImageAttachment(payload: ImagePayload, options: AttachmentOptions = {}): Promise<string> {
   const directory = resolve(options.directory || DEFAULT_ATTACHMENT_DIRECTORY);
   await ensureSafeDirectory(directory);
-  const path = resolve(String(payload?.path || ''));
+  const path = await retainedPath(payload?.path);
   if (dirname(path) !== directory || !/^[\da-f-]{36}\.(png|jpg|webp)$/i.test(path.slice(directory.length + 1))) throw new Error('attachment_path_not_allowed');
   const stats = await lstat(path);
   if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= 0 || stats.size > MAX_IMAGE_BYTES) throw new Error('attachment_not_found');
@@ -121,6 +132,32 @@ export async function resolveNativeImageAttachment(payload: ImagePayload, option
     if (!await detectImageType(bytes)) throw new Error('attachment_content_mismatch');
   } finally { await handle.close(); }
   return path;
+}
+
+/** Import only completed, validated managed uploads. Keep their exact original. */
+export async function prepareRetainedImage(payload: Record<string, any>) {
+  const originalPath = await retainedPath(payload.path);
+  if (!managedFile(originalPath, [FILE_DIRECTORY]) || !/^[\da-f-]{36}-.+/i.test(basename(originalPath))) throw new Error('attachment_path_not_allowed');
+  const stats = await lstat(originalPath);
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= 0 || stats.size > MAX_IMAGE_BYTES) throw new Error('attachment_too_large');
+  const handle = await open(originalPath, 'r');
+  let bytes: Buffer;
+  try {
+    if (!sameFileSnapshot(fileSnapshot(stats), fileSnapshot(await handle.stat()))) throw new Error('attachment_file_changed');
+    bytes = await readBoundedFile(handle, MAX_IMAGE_BYTES, 'attachment', stats);
+  } finally { await handle.close(); }
+  const detected = await detectImageType(bytes);
+  if (!detected) throw new Error('attachment_content_mismatch');
+  const high = payload.quality === 'high';
+  await ensureSafeDirectory(IMAGE_DIRECTORY);
+  const path = join(IMAGE_DIRECTORY, randomUUID() + (high ? detected.extension : '.webp'));
+  if (high) await copyFile(originalPath, path);
+  else await sharp(bytes).rotate().resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(path);
+  const name = safeDisplayName(payload.name, detected.extension);
+  await writeFile(path + '.json', JSON.stringify({ originalPath, name, retained: true, createdAt: Date.now() }), { mode: 0o600 });
+  const preview = await readRasterImagePreview({ path, allowedRoots: [IMAGE_DIRECTORY], errorPrefix: 'attachment' });
+  await writeFile(previewPath(path), Buffer.from(preview.data, 'base64'), { mode: 0o600 });
+  return { path, name, originalPath, mimeType: high ? detected.mimeType : 'image/webp', size: (await lstat(path)).size, hasPreview: true };
 }
 
 async function decodeImagePayload(payload: ImagePayload, maxBytes: number) {

@@ -700,13 +700,11 @@ export function loadKnownAttachments(): Record<string, KnownAttachment> {
     const legacy = JSON.parse(localStorage.getItem('bridge.knownAttachments') || '{}') as Record<string, KnownAttachment>;
     const current = JSON.parse(localStorage.getItem(ATTACHMENT_STORAGE_KEY) || '{}') as Record<string, KnownAttachment>;
     const value = { ...legacy, ...current };
-    const now = Date.now();
     const valid = Object.fromEntries(Object.entries(value).filter(([, attachment]) => (
       attachment
       && typeof attachment.path === 'string'
       && typeof attachment.name === 'string'
       && Number.isFinite(attachment.savedAt)
-      && now - attachment.savedAt < 24 * 60 * 60 * 1000
     )));
     localStorage.setItem(ATTACHMENT_STORAGE_KEY, JSON.stringify(valid));
     localStorage.removeItem('bridge.knownAttachments');

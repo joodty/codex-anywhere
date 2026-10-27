@@ -3,9 +3,10 @@ import { BrowserSessionBroker } from '../browser-control/session-broker.js';
 import { startBrowserEndpoint } from '../browser-control/local-endpoint.js';
 import { CodexAppServer } from './codex-app-server.js';
 import { CodexDesktopClient } from './codex-desktop.js';
-import { readImageAttachment, saveImageAttachment, resolveNativeImageAttachment } from './attachments.js';
+import { readImageAttachment, saveImageAttachment, resolveNativeImageAttachment, prepareRetainedImage } from './attachments.js';
+import { MANAGED_ROOTS, retainLegacyFiles, originalRetainedFile, bindRetainedFiles } from './retained-files.js';
 import { desktopSummary } from './desktop-controls.js';
-import { FileUploadManager, UPLOAD_DIRECTORY } from './file-uploads.js';
+import { FileUploadManager } from './file-uploads.js';
 import { loadConnectorConfig } from './config.js';
 import { DownloadManager } from './file-downloads.js';
 import { generatedImagesDirectory } from './generated-images.js';
@@ -44,6 +45,7 @@ if (!instanceLock) {
   process.exit(0);
 }
 const connectorLock = instanceLock;
+await retainLegacyFiles();
 const codex = new CodexAppServer({
   releaseRuntimeAfterTurn: mode === 'desktop',
   bin: codexBin,
@@ -54,7 +56,7 @@ const codex = new CodexAppServer({
 });
 const desktop = mode === 'desktop' ? new CodexDesktopClient() : null;
 const downloads = new DownloadManager({
-  allowedRoots: [...allowedRoots, generatedImagesDirectory(), visualizationsDirectory(), UPLOAD_DIRECTORY],
+  allowedRoots: [...allowedRoots, generatedImagesDirectory(), visualizationsDirectory(), ...MANAGED_ROOTS],
   allowAnyFileDownload,
 });
 // Opt in per environment; no MCP listener or configuration change on stable installs.
@@ -70,6 +72,9 @@ const handleRequest = createRequestHandler({
   fileUploads: new FileUploadManager(),
   attachments: {
     save: saveImageAttachment,
+    prepare: prepareRetainedImage,
+    original: originalRetainedFile,
+    bind: bindRetainedFiles,
     nativeInput: resolveNativeImageAttachment,
     read: (payload) => readImageAttachment(payload),
   },

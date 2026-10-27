@@ -41,6 +41,7 @@ export type ConnectorStatus = {
   mode: 'desktop' | 'headless';
   platform: string;
   codexOnline: boolean;
+  desktopOnline?: boolean;
   activeTurn: boolean;
   capabilities: { networkAccess: boolean; fullAccess: boolean; fileUpload?: boolean; sessionArchive?: boolean; sessionDelete?: boolean;
     sessionArchivePendingApproval?: boolean; sessionRestore?: boolean; desktopNativeImages?: boolean; desktopNativeState?: boolean };
@@ -110,7 +111,7 @@ export type HistoryPage = {
 };
 export type TurnStartResult = { threadId: string; delivery?: 'desktop' | 'appServer' };
 export type PendingAttachment = { file: File; kind: 'image' | 'file'; transferPreview?: File; previewUrl: string };
-export type DownloadedImage = { path: string; mimeType: string; size: number; data: string };
+export type DownloadedImage = { path: string; name?: string; mimeType: string; size: number; data: string };
 export type VisualizationDocument = { name: string; size: number; content?: string };
 export type TextPreviewDocument = {
   name: string;

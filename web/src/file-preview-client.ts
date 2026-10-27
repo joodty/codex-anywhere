@@ -19,10 +19,10 @@ export function validateTextPreview(result: TextPreviewDocument) {
   return result;
 }
 
-export async function readLinkedImagePreview(request: BridgeRequest, path: string) {
+export async function readLinkedImagePreview(request: BridgeRequest, path: string, quality?: 'high') {
   let image: DownloadedImage;
   try {
-    image = await request<DownloadedImage>('attachment.read', { path, source: 'local' });
+    image = await request<DownloadedImage>('attachment.read', { path, source: 'local', ...(quality ? { quality } : {}) });
   } catch (error) {
     // Markdown links do not carry the attachment source. Generated images can
     // live outside project roots (including a custom CODEX_HOME). Ask the
@@ -36,7 +36,7 @@ export async function readLinkedImagePreview(request: BridgeRequest, path: strin
 }
 
 export function useFilePreviews(request: BridgeRequest, threadId: string | null) {
-  const readPreviewImage = useCallback((path: string) => readLinkedImagePreview(request, path), [request]);
+  const readPreviewImage = useCallback((path: string, quality?: 'high') => readLinkedImagePreview(request, path, quality), [request]);
   const readVisualization = useCallback(async (path: string) => {
     const result = await request<VisualizationDocument>('visualization.read', { path });
     if (!result?.content || !validPreviewText(result.content, result.size, 2 * 1024 * 1024)) {

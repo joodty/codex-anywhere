@@ -13,7 +13,8 @@ test('every control inherits transparent tap feedback with keyboard focus preser
   assert.match(css, /:where\(button, a\[href\], summary, \[role=button\], \[role=option\]\)\s*\{\s*touch-action: manipulation;/);
   assert.match(css, /:focus:not\(:focus-visible\)\s*\{\s*outline: none;/);
   assert.match(css, /:where\([^}]+\):focus-visible\s*\{\s*outline: 2px solid #[\da-f]+;/);
-  assert.doesNotMatch(css, /touch-action: none/);
+  // The image canvas owns pinch/pan; the rest of the app keeps native gestures.
+  assert.doesNotMatch(css.replace(/\.image-viewer-canvas\s*\{[^}]*\}/g, ''), /touch-action: none/);
 });
 
 test('all hover decoration is limited to devices with a fine hover pointer', () => {

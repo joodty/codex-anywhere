@@ -33,8 +33,20 @@ export async function uploadFile(
       const end = Math.min(file.size, offset + chunkBytes);
       const data = await fileToBase64(new File([file.slice(offset, end)], file.name));
       check();
-      const result = await request<{ nextOffset: number }>('file.upload.chunk', { uploadId, offset, data });
-      if (result.nextOffset !== end) throw new Error('file_upload_offset_mismatch');
+      let result: { nextOffset: number } | undefined;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { result = await request<{ nextOffset: number }>('file.upload.chunk', { uploadId, offset, data }); break; }
+        catch (error) {
+          check();
+          if (attempt === 2) throw error;
+          // A lost reply may already have committed the chunk. Query its offset;
+          // never append it twice and never retry sending a model turn.
+          const status = await request<{ nextOffset: number }>('file.upload.status', { uploadId });
+          if (status.nextOffset === end) { result = status; break; }
+          if (status.nextOffset !== offset) throw new Error('file_upload_offset_mismatch');
+        }
+      }
+      if (result?.nextOffset !== end) throw new Error('file_upload_offset_mismatch');
       offset = end;
       check();
       onProgress({ phase: 'sending', percent: Math.floor(offset / file.size * 100) });

@@ -114,7 +114,7 @@ test('sidebar only selects sessions; deletion uses the current conversation titl
   };
   const { document } = parseHTML(renderToStaticMarkup(createElement(SessionSidebar, props)));
   assert.equal(document.querySelectorAll('.session-delete-button').length, 0);
-  assert.equal(document.querySelectorAll('.session-list button').length, 3);
+  assert.equal(document.querySelectorAll('.session-list .session-card').length, 3);
   assert.equal(document.querySelectorAll('.session-card.running').length, 2);
   assert.equal(document.querySelectorAll('button button').length, 0);
 });

@@ -39,6 +39,7 @@ type ConversationTimelineProps = {
   timeline: TimelineItem[];
   knownAttachments: Record<string, KnownAttachment>;
   attachmentUrls: Record<string, string>;
+  attachmentNames?: Record<string, string>;
   onRetryImages?: () => void;
   executionActive: boolean;
   progressAnimationReady: boolean;
@@ -49,7 +50,7 @@ type ConversationTimelineProps = {
   onReadTextFile: (path: string) => Promise<TextPreviewDocument>;
   onReadTurnDiff: (turnId: string) => Promise<TurnDiffDocument>;
   onReadVisualization: (path: string) => Promise<string>;
-  onReadPreviewImage: (path: string) => Promise<string>;
+  onReadPreviewImage: (path: string, quality?: 'high') => Promise<string>;
 };
 
 export const ConversationTimeline = memo(function ConversationTimeline({
@@ -70,6 +71,7 @@ export const ConversationTimeline = memo(function ConversationTimeline({
   timeline,
   knownAttachments,
   attachmentUrls,
+  attachmentNames,
   onRetryImages,
   executionActive,
   progressAnimationReady,
@@ -88,12 +90,14 @@ export const ConversationTimeline = memo(function ConversationTimeline({
       ? (item.questionReplies || []).map((reply) => [reply.questionItemId, reply.answer] as const) : []
   )), ...Object.entries(resolvedQuestionAnswers || {})]), [timeline, resolvedQuestionAnswers]);
   const resolvedItems = useMemo(() => timeline.map((item) => {
-    const attachment = resolveTimelineAttachment(item, threadId, knownAttachments, environmentId);
+    const original = resolveTimelineAttachment(item, threadId, knownAttachments, environmentId);
+    const attachment = original && attachmentNames?.[original.path] ? { ...original, name: attachmentNames[original.path] } : original;
     return {
       attachment,
-      item: attachment && !item.attachment ? { ...item, attachment } : item,
+      item: attachment ? { ...item, attachment } : item,
     };
-  }), [environmentId, knownAttachments, threadId, timeline]);
+  }), [environmentId, knownAttachments, threadId, timeline, attachmentNames]);
+  const imageGallery = useMemo(() => resolvedItems.flatMap(({ attachment }) => attachment ? [{ path: attachment.path, name: attachment.name, url: attachmentUrls[attachment.path] }] : []).filter((image, index, all) => all.findIndex(other => other.path === image.path) === index), [resolvedItems, attachmentUrls]);
   const awaitingVisibleHistory = Boolean(
     threadId && !timeline.length && historyLoading,
   );
@@ -173,6 +177,7 @@ export const ConversationTimeline = memo(function ConversationTimeline({
                 ? progressAnimationReady && item.id === liveProgressItemId
                 : Boolean(item.transient))}
               imageSource={attachment ? attachmentUrls[attachment.path] : undefined}
+              imageGallery={imageGallery}
               onRetryImage={onRetryImages}
               onDownloadFile={onDownloadFile}
               onReadTextFile={onReadTextFile}

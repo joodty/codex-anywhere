@@ -187,4 +187,6 @@ Please report security concerns privately through the [security policy](docs/SEC
 
 ## License
 
+Local personal deployment changes are documented in [本地优化说明](LOCAL_CHANGES.zh-CN.md).
+
 [MIT](LICENSE)

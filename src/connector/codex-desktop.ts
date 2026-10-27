@@ -21,6 +21,7 @@ type DesktopMessage = {
   model?: unknown;
   thinking?: unknown;
   imagePath?: string;
+  imagePaths?: string[];
 };
 export type DesktopThreadStatus = { id: string; status: string };
 type ToolCall = { tool: string; arguments: JsonObject; callerThreadId: string; callId: string };
@@ -42,11 +43,12 @@ export class CodexDesktopClient {
     this.controls = new DesktopControls(this.userInput);
   }
 
-  async sendMessage({ threadId, text, requestId, model, thinking, imagePath }: DesktopMessage) {
+  async sendMessage({ threadId, text, requestId, model, thinking, imagePath, imagePaths }: DesktopMessage) {
     const targetThreadId = requireThreadId(threadId);
     const prompt = String(text || '').trim();
     if (!prompt) throw new Error('message_required');
     await this.userInput.send({ threadId: targetThreadId, text: prompt, requestId, ...(imagePath ? { imagePath } : {}),
+      ...(imagePaths?.length ? { imagePaths } : {}),
       model: String(model || '').trim() || undefined,
       thinking: String(thinking || '').trim() || undefined,
     });

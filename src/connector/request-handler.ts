@@ -65,8 +65,9 @@ type Dependencies = {
   browser?: BrowserSessionBroker;
   codex: CodexGateway;
   desktop?: DesktopGateway | null;
-  attachments: { save(payload: Payload): Promise<any>; read(payload: Payload): Promise<any>; nativeInput?(payload: Payload): Promise<string> };
-  fileUploads?: Pick<FileUploadManager, 'begin' | 'chunk' | 'complete' | 'cancel'>;
+  attachments: { save(payload: Payload): Promise<any>; read(payload: Payload): Promise<any>; nativeInput?(payload: Payload): Promise<string>;
+    prepare?(payload: Payload): Promise<any>; original?(path: unknown): Promise<any>; bind?(payload: Payload): Promise<any> };
+  fileUploads?: Pick<FileUploadManager, 'begin' | 'chunk' | 'complete' | 'cancel'> & Partial<Pick<FileUploadManager, 'status'>>;
   visualizations: { read(payload: Payload): Promise<any> };
   downloads: {
     open(payload: Payload, clientId?: string): Promise<any>;
@@ -323,11 +324,15 @@ async function dispatchAction({
     };
   }
   if (action === 'attachment.upload') return attachments.save(payload);
+  if (action === 'attachment.prepare' && attachments.prepare) return attachments.prepare(payload);
+  if (action === 'attachment.original' && attachments.original) return attachments.original(payload.path);
+  if (action === 'attachment.bind' && attachments.bind) return attachments.bind(payload);
   if (action.startsWith('file.upload.')) {
     if (!fileUploads) throw new Error('file_upload_unsupported');
     const owner = clientDeviceId || clientId || '';
     if (action === 'file.upload.begin') return fileUploads.begin(payload, owner);
     if (action === 'file.upload.chunk') return fileUploads.chunk(payload, owner);
+    if (action === 'file.upload.status' && fileUploads.status) return fileUploads.status(payload, owner);
     if (action === 'file.upload.complete') return fileUploads.complete(payload, owner);
     if (action === 'file.upload.cancel') return fileUploads.cancel(payload, owner);
     throw new Error('unsupported_action');
@@ -454,14 +459,16 @@ async function startTurn({
   // resuming them through the bridge's app-server creates a second writer and
   // makes later Desktop delivery fail with "already has an active writer".
   if (!desktop) throw new Error('desktop_app_unavailable');
-  const imagePath = payload.image && attachments.nativeInput ? await attachments.nativeInput(payload.image) : undefined;
-  if (payload.image && !imagePath) throw new Error('desktop_image_unsupported');
+  const images = payload.images ?? (payload.image ? [payload.image] : []);
+  if (!Array.isArray(images) || images.length > 6) throw new Error('attachment_limit');
+  if (images.length && !attachments.nativeInput) throw new Error('desktop_image_unsupported');
+  const imagePaths = await Promise.all(images.map(image => attachments.nativeInput!(image)));
   await codex.prepareDesktopTurn?.();
   return sendWithBrowserContext(browser, threadId, payload.text, (text) => desktop.sendMessage({
     threadId,
     text,
     requestId,
-    ...(imagePath ? { imagePath } : {}),
+    ...(imagePaths.length === 1 ? { imagePath: imagePaths[0] } : imagePaths.length ? { imagePaths } : {}),
   }));
 }
 

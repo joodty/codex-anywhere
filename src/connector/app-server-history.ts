@@ -5,7 +5,7 @@ import {
 import { publicError } from '../shared/protocol.js';
 import { asyncQuestionsFromItem } from '../shared/async-questions.js';
 import { extractGeneratedImageAttachment } from './generated-images.js';
-import { userImageAttachment } from '../shared/user-image.js';
+import { userImageAttachment, userImageAttachments } from '../shared/user-image.js';
 
 type JsonObject = Record<string, any>;
 
@@ -68,11 +68,12 @@ export function mapTurns(turns: unknown) {
           phase: item.phase || '',
           status: item.status || '',
           ...content,
-          ...(userMessage ? { attachment: userImageAttachment(item.content) } : {}),
+          ...(userMessage ? { attachment: userImageAttachment(item.content), attachments: userImageAttachments(item.content) } : {}),
           ...(questions ? { questions } : {}),
           ...timing,
         };
       })
+      .flatMap((item: JsonObject) => [item, ...(item.attachments || []).slice(1).map((attachment: unknown) => ({ ...item, text: '', attachment }))])
       .filter((item: JsonObject) => item.text || item.attachment || item.questions);
     const toolSummary = summarizeTurnTools(rawItems);
     if (toolSummary) {

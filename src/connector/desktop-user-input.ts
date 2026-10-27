@@ -4,6 +4,10 @@ import { DesktopState } from './desktop-state.js';
 import { DesktopInputPipe } from './desktop-input-pipe.js';
 import { NativeRequestError } from './desktop-native-pipe.js';
 
+// Full native history snapshots can exceed the small request/reply frame bound.
+// Keep this larger, bounded receive budget on the local state connection only.
+export const MAX_DESKTOP_STATE_FRAME_BYTES = 64 * 1024 * 1024;
+
 export type UserInput = { threadId: string; text: string; requestId: unknown; model?: string; thinking?: string; imagePath?: string; imagePaths?: string[]; idleOnly?: boolean };
 
 export class DesktopUserInput {
@@ -14,7 +18,7 @@ export class DesktopUserInput {
   private owners = new Map<string, Promise<{ id: string; settings: Record<string, any> }>>();
 
   constructor(private openThread: (threadId: string, timeoutMs?: number) => Promise<unknown>, private timeoutMs: number,
-    pipe = new DesktopInputPipe(), statePipe = new DesktopInputPipe(pipe.path)) {
+    pipe = new DesktopInputPipe(), statePipe = new DesktopInputPipe(pipe.path, MAX_DESKTOP_STATE_FRAME_BYTES)) {
     this.pipe = pipe;
     // Large follower snapshots must never disconnect in-flight user input or
     // small owner/model requests. Both connections still use the same owner.

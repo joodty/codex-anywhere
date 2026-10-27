@@ -68,6 +68,20 @@ function request(action, payload = {}) {
   return { action, payload, requestId: 'request-1', clientId: 'client-1' };
 }
 
+test('managed idle submission validates the original chat and native attachments before dispatch', async () => {
+  const calls: string[] = [];
+  const handler = createRequestHandler({ ...createDependencies({ codex: { readSession: async id => { calls.push('read:' + id); return {}; } },
+    attachments: { nativeInput: async image => { calls.push('image:' + image.path); } } }), queue: {
+      submit: async value => { calls.push('submit:' + value.threadId); return { accepted: true, queued: false, turnId: 'native-turn' }; },
+    } as any });
+  const result = await handler(request('queue.submit', { id: 'message', threadId: 'chat', text: 'hello', images: [{ path: 'retained-image' }] }));
+  assert.equal(result.ok, true); assert.equal(result.data.queued, false); assert.equal(result.data.turnId, 'native-turn');
+  assert.deepEqual(calls, ['read:chat', 'image:retained-image', 'submit:chat']);
+  const denied = createRequestHandler({ ...createDependencies({ codex: { readSession: async () => { throw new Error('workspace_not_allowed'); } } }),
+    queue: { submit: async () => assert.fail('unauthorized chat must never dispatch') } as any });
+  assert.equal((await denied(request('queue.submit', { id: 'message', threadId: 'foreign-chat', text: 'hello' }))).ok, false);
+});
+
 test('stopping a pending new turn without a thread id does not look up an invalid queue', async () => {
   const handler = createRequestHandler({ ...createDependencies(), queue: { list: () => assert.fail('pending new turn has no queue target') } as any });
   const response = await handler(request('turn.stop'));

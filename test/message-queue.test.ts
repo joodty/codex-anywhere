@@ -107,3 +107,79 @@ test('message bounds count UTF-8 bytes so a queue response stays within transpor
   assert.throws(() => queue.add(message('long', '中'.repeat(35000))), /queue_message_invalid/);
   assert.equal(queue.list('chat').items.length, 0);
 });
+
+test('idle submit starts before responding without exposing a pending queue and retries stay idempotent after completion', async t => {
+  const f = await fixture(t); let state = idle(), calls = 0;
+  const visible: number[] = [];
+  const deps = { path: f.path, state: async () => state, send: async () => {
+    calls++;
+    assert.equal(JSON.parse(await readFile(f.path, 'utf8')).threads.chat.items[0].status, 'dispatching');
+    return { turnId: 'direct-turn' };
+  }, changed: () => visible.push(queue.list('chat').items.length) };
+  const queue = new MessageQueue(deps); f.queues.push(queue);
+  const result = await queue.submit(message('direct'));
+  assert.equal(calls, 1); assert.equal(result.queued, false); assert.equal(result.turnId, 'direct-turn');
+  assert.deepEqual(visible, [0, 0, 0]);
+  assert.equal((await queue.submit(message('direct'))).existing, true); assert.equal(calls, 1);
+  state = { ...idle(), turns: [{ id: 'direct-turn', status: 'completed' }] }; await queue.tick();
+  const restarted = new MessageQueue({ ...deps, changed: undefined }); f.queues.push(restarted);
+  const retried = await restarted.submit(message('direct'));
+  assert.equal(retried.queued, false); assert.equal(retried.turnId, 'direct-turn'); assert.equal(calls, 1);
+});
+
+test('busy submit becomes a visible queue and runs only after the original turn completes', async t => {
+  const f = await fixture(t); let calls = 0;
+  let state: QueueState = { ...idle(), status: 'active', turnId: 'original', turns: [{ id: 'original', status: 'inProgress' }] };
+  const queue = new MessageQueue({ path: f.path, state: async () => state, send: async () => { calls++; return { turnId: 'next' }; } }); f.queues.push(queue);
+  assert.equal((await queue.submit(message('next'))).queued, true);
+  assert.equal(calls, 0); assert.equal(queue.list('chat').items[0].afterTurnId, 'original');
+  state = { ...idle(), turns: [{ id: 'original', status: 'completed' }] }; await queue.tick();
+  assert.equal(calls, 1);
+});
+
+test('idle submit settles a completed delivery immediately and keeps earlier pending messages ahead', async t => {
+  const f = await fixture(t); const sent: string[] = []; let state = idle();
+  const queue = new MessageQueue({ path: f.path, state: async () => state, send: async item => { sent.push(item.id); return { turnId: item.id + '-turn' }; } }); f.queues.push(queue);
+  await queue.submit(message('a'));
+  state = { ...idle(), turns: [{ id: 'a-turn', status: 'completed' }] };
+  assert.equal((await queue.submit(message('b'))).queued, false);
+  assert.deepEqual(sent, ['a', 'b']);
+  queue.add(message('c'));
+  assert.equal((await queue.submit(message('d'))).queued, true);
+  assert.deepEqual(queue.list('chat').items.map(item => item.id), ['c', 'd']);
+  assert.deepEqual(sent, ['a', 'b']);
+});
+
+test('concurrent idle submissions and the worker cannot send twice or jump the queue', async t => {
+  const f = await fixture(t); let release!: () => void, entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const barrier = new Promise<void>(resolve => { release = resolve; }); const sent: string[] = [];
+  const queue = new MessageQueue({ path: f.path, state: async () => idle(), send: async item => { sent.push(item.id); entered(); await barrier; return { turnId: 'first-turn' }; } }); f.queues.push(queue);
+  const first = queue.submit(message('first')); await started;
+  assert.equal((await queue.submit(message('second'))).queued, true); await queue.tick();
+  release(); assert.equal((await first).queued, false); assert.deepEqual(sent, ['first']);
+  assert.deepEqual(queue.list('chat').items.map(item => item.id), ['second']);
+});
+
+test('idle submit falls back safely when native becomes busy or delivery is uncertain, and honors manual pause', async t => {
+  const f = await fixture(t); let failure = 'queue_thread_busy', calls = 0;
+  const queue = new MessageQueue({ path: f.path, state: async () => idle(), send: async () => { calls++; throw new Error(failure); } }); f.queues.push(queue);
+  assert.equal((await queue.submit(message('race'))).queued, true);
+  assert.equal(queue.list('chat').items[0].status, 'queued');
+  queue.remove(queue.list('chat').items[0]); failure = 'desktop_delivery_unknown';
+  await queue.submit(message('unknown')); assert.equal(queue.list('chat').items[0].status, 'uncertain');
+  const restored = new MessageQueue({ path: f.path, state: async () => idle(), send: async () => assert.fail('must not resend') }); f.queues.push(restored);
+  await restored.tick(); assert.equal(restored.list('chat').items[0].status, 'uncertain');
+  queue.remove(queue.list('chat').items[0]); queue.pause('chat');
+  assert.equal((await queue.submit(message('paused'))).queued, true); assert.equal(calls, 2);
+});
+
+test('unreadable native state explains the wait and automatically clears the warning after recovery', async t => {
+  const f = await fixture(t); let unavailable = true, sends = 0;
+  const queue = new MessageQueue({ path: f.path, state: async () => { if (unavailable) throw new Error('desktop_state_unavailable'); return idle(); },
+    send: async () => { sends++; return { turnId: 'recovered' }; } }); f.queues.push(queue);
+  assert.equal((await queue.submit(message('waiting'))).queued, true);
+  assert.match(queue.list('chat').reason, /无法读取本机/); assert.equal(sends, 0);
+  unavailable = false; await queue.tick();
+  assert.equal(sends, 1); assert.equal(queue.list('chat').reason, '');
+});

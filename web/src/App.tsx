@@ -1800,9 +1800,9 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     const attachments = questionReplies ? [] : pendingAttachments;
     const attachment = attachments[0] || null;
     const targetThreadId = threadIdRef.current;
-    const enqueue = !questionReplies && intent === 'auto' && Boolean(targetThreadId) && queueSupported;
+    const managedSend = !questionReplies && intent === 'auto' && Boolean(targetThreadId) && queueSupported;
     const sendKey = JSON.stringify([environmentIdRef.current, targetThreadId || NEW_TURN_KEY]);
-    const steering = !enqueue && canSteerOwnedTurn(
+    const steering = !managedSend && canSteerOwnedTurn(
       running, executionState, ownedTurnThreadId, targetThreadId,
     );
     const directDesktopDelivery = canSendToActiveDesktopTurn(
@@ -1812,7 +1812,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       (!text && !attachment)
       || uploading
       || sendingRef.current.has(sendKey)
-      || (running && !steering && !enqueue)
+      || (running && !steering && !managedSend)
       || (steering && Boolean(attachment))
     ) return;
     const isExistingSession = Boolean(targetThreadId);
@@ -1889,13 +1889,13 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         if (targetThreadId) rememberAttachment(targetThreadId, visibleText, timelineAttachment);
       }
       if (uploadOwnerRef.current === delivery.id) { setUploading(false); uploadOwnerRef.current = null; }
-      if (enqueue) {
+      if (managedSend) {
         const pendingKey = 'personal.queueSubmission.' + sendKey;
         const signature = JSON.stringify([text, imageQuality, attachments.map(item => [item.file.name, item.file.size, item.file.lastModified])]);
         const previous = readLocal<{ id: string; signature: string } | null>(pendingKey, null);
         const id = previous?.signature === signature ? previous.id : makeId();
         writeLocal(pendingKey, { id, signature });
-        const accepted = await request<{ accepted: boolean; threadId: string }>('queue.add', {
+        const accepted = await request<{ accepted: boolean; threadId: string; queued: boolean; existing: boolean; turnId?: string }>('queue.submit', {
           id, threadId: targetThreadId, text: turnText, images: nativeImages, files: attachments.map(item => item.file.name),
           ...(desktopState?.turnId ? { afterTurnId: desktopState.turnId } : {}),
         });
@@ -1904,6 +1904,21 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         if (boundPaths.length) void request('attachment.bind', { threadId: targetThreadId, paths: boundPaths }).catch(() => reportTimelineError(new Error('附件已保留，但会话关联未完成。')));
         if (isCurrentSessionRequest(targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current)) {
           setPrompt(''); setPendingAttachments([]); setMessageDelivery(null); void queueRefreshRef.current();
+          if (!accepted.queued && accepted.turnId && !accepted.existing) {
+            optimisticItemId = addTimeline('user', visibleText, true, true, timelineAttachment);
+            for (const image of gallery.slice(1)) optimisticExtraIds.push(addTimeline('user', '', true, true, image));
+            const sentAt = Date.now();
+            setTimeline(current => {
+              let next = acknowledgeOptimisticUser(current, optimisticItemId, sentAt);
+              for (const id of optimisticExtraIds) next = acknowledgeOptimisticUser(next, id, sentAt);
+              return next;
+            });
+            runningRef.current = false;
+            ownedTurnThreadIdRef.current = null;
+            updateExecution({ running: false, ownedTurnThreadId: null });
+            awaitingDesktopTurnRef.current = { text: visibleText, previousActivityId: latestActivityIdRef.current, activityId: '', seen: false };
+            setExecutionState('running'); setFollowState('following');
+          }
         }
         return true;
       }

@@ -202,13 +202,13 @@ async function dispatchAction({
     if (!queue || mode !== 'desktop') throw new Error('queue_unsupported');
     const threadId = String(payload.threadId || '');
     if (action === 'queue.list') return queue.list(threadId);
-    if (action === 'queue.add') {
+    if (action === 'queue.add' || action === 'queue.submit') {
       await codex.readSession(threadId);
       if (Array.isArray(payload.images)) for (const image of payload.images) {
         if (!attachments.nativeInput) throw new Error('desktop_image_unsupported');
         await attachments.nativeInput(image);
       }
-      return queue.add({ ...payload, threadId });
+      return action === 'queue.submit' ? queue.submit({ ...payload, threadId }) : queue.add({ ...payload, threadId });
     }
     if (action === 'queue.edit') return queue.edit(payload);
     if (action === 'queue.remove') return queue.remove(payload);

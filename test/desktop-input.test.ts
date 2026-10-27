@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DesktopInputPipe } from '../src/connector/desktop-input-pipe.js';
-import { DesktopUserInput } from '../src/connector/desktop-user-input.js';
+import { DesktopUserInput, MAX_DESKTOP_STATE_FRAME_BYTES } from '../src/connector/desktop-user-input.js';
 import { NativeRequestError, encodeNativeFrame, MAX_FRAME_BYTES } from '../src/connector/desktop-native-pipe.js';
 
 async function host(run: (r: any, s: net.Socket) => void, body: (pipe: DesktopInputPipe) => Promise<void>) {
@@ -62,7 +62,7 @@ test('an oversized follower snapshot cannot abort a concurrent native message or
     if (standard(r, socket)) return;
     if (r.method === 'thread-stream-following-changed') {
       if (r.params.following) {
-        const header = Buffer.alloc(4); header.writeUInt32LE(MAX_FRAME_BYTES + 1);
+        const header = Buffer.alloc(4); header.writeUInt32LE(MAX_DESKTOP_STATE_FRAME_BYTES + 1);
         socket.write(header);
       }
     } else if (r.method === 'thread-follower-steer-turn') {
@@ -79,6 +79,29 @@ test('an oversized follower snapshot cannot abort a concurrent native message or
       ]);
       assert.equal((await input.owner('fixture', false)).settings.model, 'gpt-6-astra');
       assert.equal(disconnected, 0);
+    } finally { input.close(); }
+  });
+});
+
+test('long native snapshots above 8 MiB remain readable and permit strict idle delivery on the separate state connection', async () => {
+  let starts = 0;
+  await host((r, socket) => {
+    if (standard(r, socket)) return;
+    if (r.method === 'thread-stream-following-changed' && r.params.following) {
+      const body = Buffer.from(JSON.stringify({ type: 'broadcast', sourceClientId: 'owner', method: 'thread-stream-state-changed', version: 11,
+        params: { hostId: 'local', conversationId: 'fixture', change: { type: 'snapshot', revision: 1,
+          conversationState: { id: 'fixture', threadRuntimeStatus: { type: 'idle' }, history: 'x'.repeat(MAX_FRAME_BYTES) } } } }));
+      const header = Buffer.alloc(4); header.writeUInt32LE(body.length); socket.write(header); socket.write(body);
+    } else if (r.method === 'thread-follower-start-turn') {
+      starts++; reply(socket, r, { result: { turn: { id: 'long-chat-turn' } } });
+    } else if (r.method === 'thread-follower-steer-turn') assert.fail('idle delivery must never steer');
+  }, async pipe => {
+    const input = new DesktopUserInput(async () => assert.fail(), 5000, pipe);
+    try {
+      assert.equal((await input.state.read('fixture', 'owner', 5000)).threadRuntimeStatus.type, 'idle');
+      assert.equal((await input.send({ ...message, idleOnly: true })).turnId, 'long-chat-turn');
+      assert.equal(starts, 1);
+      await assert.rejects(pipe.request('thread-owner-discovery', { text: 'x'.repeat(MAX_FRAME_BYTES) }, 1000), /desktop_request_too_large/);
     } finally { input.close(); }
   });
 });

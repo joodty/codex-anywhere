@@ -6,10 +6,11 @@ export type QueueState = { status: string; turnId: string | null; blocked: boole
 export type QueuedMessage = {
   id: string; threadId: string; text: string; images: Array<{ path: string }>; files: string[];
   createdAt: number; revision: number; status: 'queued' | 'dispatching' | 'awaiting' | 'failed' | 'uncertain';
-  afterTurnId?: string; turnId?: string; error?: string;
+  afterTurnId?: string; turnId?: string; error?: string; direct?: boolean;
 };
-type ThreadQueue = { paused: boolean; reason: string; pauseCause?: 'manual' | 'stopped' | 'review'; items: QueuedMessage[] };
-type Document = { version: 1; threads: Record<string, ThreadQueue>; receipts: Array<{ id: string; threadId: string }> };
+type ThreadQueue = { paused: boolean; reason: string; waitingReason?: string; pauseCause?: 'manual' | 'stopped' | 'review'; items: QueuedMessage[] };
+type Receipt = { id: string; threadId: string; turnId?: string; direct?: boolean };
+type Document = { version: 1; threads: Record<string, ThreadQueue>; receipts: Receipt[] };
 type Dependencies = {
   path: string;
   state(threadId: string): Promise<QueueState>;
@@ -35,6 +36,7 @@ export class MessageQueue {
       this.document = { version: 1, threads: Object.assign(Object.create(null), saved.threads), receipts: saved.receipts };
       for (const queue of Object.values(this.document.threads)) for (const item of queue.items) {
         if (item.status === 'dispatching') { item.status = 'uncertain'; queue.paused = true; queue.pauseCause = 'review'; queue.reason = '连接器重启时消息交付结果未确认，请核对原会话后处理。'; }
+        if (item.status === 'queued') delete item.direct;
       }
     }
   }
@@ -56,9 +58,9 @@ export class MessageQueue {
   }
   list(threadId: string) {
     const queue = this.thread(threadId);
-    return { threadId, paused: queue.paused, reason: queue.reason, items: queue.items.map(item => ({ ...item, images: item.images.map(image => ({ ...image })), files: [...item.files] })) };
+    return { threadId, paused: queue.paused, reason: queue.reason || queue.waitingReason || '', items: queue.items.filter(item => !item.direct || ['failed', 'uncertain'].includes(item.status)).map(item => ({ ...item, images: item.images.map(image => ({ ...image })), files: [...item.files] })) };
   }
-  add(value: Record<string, any>) {
+  add(value: Record<string, any>, preferDirect = false) {
     const { id, threadId } = value;
     if (!identifier(id)) throw new Error('queue_message_id_required');
     const queue = this.thread(threadId);
@@ -75,10 +77,37 @@ export class MessageQueue {
     if (!Array.isArray(images) || images.length > 6 || images.some(image => typeof image?.path !== 'string' || image.path.length > 4096)) throw new Error('queue_message_invalid');
     const files = Array.isArray(value.files) ? value.files.filter((name: unknown) => typeof name === 'string').slice(0, 6).map((name: string) => name.slice(0, 160)) : [];
     if (!queue.items.length && queue.pauseCause !== 'manual' && queue.reason !== '队列已暂停') { queue.paused = false; queue.reason = ''; delete queue.pauseCause; }
-    queue.items.push({ id, threadId, text, images: images.map(image => ({ path: image.path })), files,
+    const direct = preferDirect && !queue.paused && queue.items.every(item => item.status === 'awaiting');
+    queue.items.push({ id, threadId, text, images: images.map(image => ({ path: image.path })), files, ...(direct ? { direct: true } : {}),
       createdAt: Date.now(), revision: 1, status: 'queued', ...(identifier(value.afterTurnId) ? { afterTurnId: value.afterTurnId } : {}) });
     this.persist(threadId);
     return { accepted: true, id, threadId };
+  }
+  /** Try an idle send now, under the same lock and durable delivery guard as the worker. */
+  async submit(value: Record<string, any>) {
+    const { id, threadId } = value;
+    const existing = Boolean(this.document.receipts.some(item => item.id === id) || Object.values(this.document.threads).some(queue => queue.items.some(item => item.id === id)));
+    const accepted = this.add(value, true);
+    const queue = this.thread(threadId);
+    const item = queue.items.find(item => item.id === id);
+    if (item?.direct && item.status === 'queued' && !this.closed) {
+      // Wait for a worker already inspecting this chat, then acquire its lock synchronously.
+      while (this.active.has(threadId)) await this.active.get(threadId);
+      if (!this.closed) {
+        const work = (async () => {
+          for (let count = 0; count < 31 && queue.items.length; count++) {
+            const head = queue.items[0];
+            await this.process(threadId);
+            if (queue.items[0] === head) break;
+          }
+        })().catch(() => { /* Expose an unsent message below if native state is unavailable. */ }).finally(() => this.active.delete(threadId));
+        this.active.set(threadId, work);
+        await work;
+      }
+    }
+    if (item?.direct && item.status === 'queued') { delete item.direct; this.persist(threadId); }
+    const delivered = item ?? this.document.receipts.find(item => item.id === id);
+    return { ...accepted, existing, queued: !(delivered?.direct && delivered.turnId), ...(delivered?.turnId ? { turnId: delivered.turnId } : {}) };
   }
   edit(value: Record<string, any>) {
     const queue = this.thread(value.threadId), item = queue.items.find(message => message.id === value.id);
@@ -111,7 +140,7 @@ export class MessageQueue {
     if (queue.items[0]?.status === 'queued') delete queue.items[0].afterTurnId;
     queue.paused = false; queue.reason = ''; delete queue.pauseCause; this.persist(threadId); return this.list(threadId);
   }
-  private receipt(id: string, threadId: string) { this.document.receipts.push({ id, threadId }); this.document.receipts = this.document.receipts.slice(-5000); }
+  private receipt(id: string, threadId: string, delivery?: Receipt) { this.document.receipts.push({ id, threadId, ...(delivery?.turnId ? { turnId: delivery.turnId, direct: delivery.direct } : {}) }); this.document.receipts = this.document.receipts.slice(-5000); }
 
   start() {
     if (this.timer || this.closed) return;
@@ -131,12 +160,21 @@ export class MessageQueue {
   private async process(threadId: string) {
     const queue = this.thread(threadId), head = queue.items[0];
     if (!head) return;
-    const state = await this.dependencies.state(threadId);
+    let state: QueueState;
+    try { state = await this.dependencies.state(threadId); }
+    catch (error) {
+      if (queue.items[0] === head && !queue.waitingReason) {
+        queue.waitingReason = '暂时无法读取本机 Codex 的会话状态，消息尚未发送；正在自动重试。';
+        this.persist(threadId);
+      }
+      throw error;
+    }
     if (this.closed || queue.items[0] !== head) return;
+    if (queue.waitingReason) { delete queue.waitingReason; this.persist(threadId); }
     if (head.status === 'awaiting') {
       const turn = state.turns.find(turn => turn.id === head.turnId);
       if (!turn || (!completed(turn.status) && !endedBadly(turn.status))) return;
-      queue.items.shift(); this.receipt(head.id, head.threadId);
+      queue.items.shift(); this.receipt(head.id, head.threadId, head);
       if (endedBadly(turn.status)) { queue.paused = true; queue.pauseCause = 'stopped'; queue.reason = '上一条排队任务已停止或失败，请检查后继续队列。'; }
       this.persist(threadId); return;
     }

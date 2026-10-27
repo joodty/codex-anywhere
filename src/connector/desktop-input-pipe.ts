@@ -29,11 +29,13 @@ export class DesktopInputPipe extends EventEmitter {
   private ready: Promise<void> | null = null;
   private clientId = '';
   private closed = false;
-  private frames = new NativeFrameReader(MAX_FRAME_BYTES);
+  private frames: NativeFrameReader;
   private pending = new Map<string, Pending>();
   private cancelConnect: (() => void) | null = null;
 
-  constructor(readonly path = '\\\\.\\pipe\\codex-ipc') { super(); }
+  constructor(readonly path = '\\\\.\\pipe\\codex-ipc', maxIncomingFrameBytes = MAX_FRAME_BYTES) {
+    super(); this.frames = new NativeFrameReader(maxIncomingFrameBytes);
+  }
 
   async request(method: InputMethod, params: Message, timeoutMs: number, targetClientId?: string): Promise<Message> {
     const deadline = Date.now() + timeoutMs;

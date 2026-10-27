@@ -2250,6 +2250,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
           <p className="eyebrow">PRIVATE BRIDGE</p>
           <h1>{t('连接 Codex Anywhere', 'Connect to Codex Anywhere')}</h1>
           <p className="login-copy">{t('使用管理员生成的十分钟单次配对链接连接这台设备。', 'Connect this device with a ten-minute, single-use pairing link from the administrator.')}</p>
+          {window.__CODEX_ANYWHERE_CONFIG__?.ownerPairingUrl === '/pair' && <a className="owner-connect" href="/pair">{t('连接我的电脑', 'Connect my computer')}</a>}
           <button type="button" className="pair-device-button" onClick={() => setPairingDialogOpen(true)}>
             {connecting ? t('连接中…', 'Connecting…') : t('输入配对链接', 'Enter pairing link')}
           </button>
@@ -2459,6 +2460,11 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
             <SidebarIcon name="panel-open" />
           </button>
           <div className="conversation-heading">
+            {activeSession && <details className="session-identity">
+              <summary title={activeSession.cwd}>{activeSession.project?.name || t('未分配项目', 'Unassigned')}<span> / {activeSession.cwd}</span></summary>
+              <div><span>{t('工作目录', 'Working directory')}</span><code>{activeSession.cwd}</code>
+                <span>{t('原会话 ID', 'Original chat ID')}</span><code>{activeSession.id}</code></div>
+            </details>}
             <div className="conversation-title">
               <strong>{activeSession?.title || (threadId ? t('Codex 会话', 'Codex session') : creatingNewSession ? t('新会话', 'New session') : t('最近会话', 'Recent session'))}</strong>
               {threadId && (

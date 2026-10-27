@@ -9,6 +9,8 @@ export type Session = {
   title: string;
   preview?: string;
   cwd?: string;
+  project?: { id: string; name: string; position: number; roots: string[] } | null;
+  desktopCatalogAvailable?: boolean;
   updatedAt?: number | string | null;
   status?: string;
   canStartNewSession?: boolean;

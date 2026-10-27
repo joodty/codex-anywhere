@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import {
   formatDate,
   isSessionRunning,
@@ -57,6 +57,12 @@ export const SessionSidebar = memo(function SessionSidebar({
   onClose,
   onSelect,
 }: SessionSidebarProps) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const selectedSession = sessions.find(session => session.id === selectedThreadId);
+  const selectedProject = selectedSession && (selectedSession.project?.id || (selectedSession.desktopCatalogAvailable ? 'unassigned' : selectedSession.cwd || 'unassigned'));
+  useEffect(() => {
+    if (selectedProject) setExpanded(current => new Set([...current, selectedProject]));
+  }, [selectedProject]);
   const visibleSessions = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     const matches = query
@@ -67,10 +73,26 @@ export const SessionSidebar = memo(function SessionSidebar({
       .sort((left, right) => sessionUpdatedAt(right.updatedAt) - sessionUpdatedAt(left.updatedAt));
   }, [search, sessions]);
 
+  const groups = useMemo(() => {
+    const groups = new Map<string, { id: string; name: string; path: string; position: number; sessions: Session[] }>();
+    for (const session of visibleSessions) {
+      const project = session.project;
+      const id = project?.id || (session.desktopCatalogAvailable ? 'unassigned' : session.cwd || 'unassigned');
+      let group = groups.get(id);
+      if (!group) {
+        group = { id, name: project?.name || (session.desktopCatalogAvailable ? t('未分配项目', 'Unassigned') : sessionProjectName(session.cwd) || t('未分配项目', 'Unassigned')),
+          path: project?.roots.join('\n') || session.cwd || '', position: project?.position ?? 10000, sessions: [] };
+        groups.set(id, group);
+      }
+      group.sessions.push(session);
+    }
+    return [...groups.values()].sort((a, b) => a.position - b.position);
+  }, [visibleSessions]);
+
   return (
     <aside className={`sidebar ${open ? 'open' : ''}`} aria-label={t('会话列表', 'Session list')}>
       <div className="sidebar-head">
-        <div><p className="eyebrow">CODEX ANYWHERE</p></div>
+        <div><p className="eyebrow">Codex <span className="web-label">网页版</span></p></div>
         <div className="sidebar-actions">
           <button className="sidebar-tool" onClick={onNewSession} aria-label={t('新会话', 'New session')} title={t('新会话', 'New session')}>
             <SidebarIcon name="plus" />
@@ -111,8 +133,19 @@ export const SessionSidebar = memo(function SessionSidebar({
           />
         </label>
       )}
-      <nav className="session-list">
-        {visibleSessions.map((session) => {
+      <div className="project-section-label">{t('项目', 'Projects')}</div>
+      <nav className="session-list" aria-label={t('项目和原会话', 'Projects and original chats')}>
+        {groups.map(group => <section className="project-group" key={group.id}>
+          <button type="button" className="project-group-heading" title={group.path}
+            aria-expanded={search.trim() ? true : expanded.has(group.id)}
+            onClick={() => setExpanded(current => {
+              const next = new Set(current); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); return next;
+            })}>
+            <span className="project-chevron" aria-hidden="true">{!search.trim() && !expanded.has(group.id) ? '›' : '⌄'}</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 7V5a1 1 0 0 1 1-1h6l2 3h8a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7z" /></svg>
+            <span>{group.name}</span><small>{group.sessions.length}</small>
+          </button>
+          {(search.trim() || expanded.has(group.id)) && <div className="project-chats">{group.sessions.map((session) => {
           const sessionRunning = isSessionRunning(session.status)
             || attention[session.id] === 'running'
             || (session.id === selectedThreadId
@@ -122,6 +155,7 @@ export const SessionSidebar = memo(function SessionSidebar({
           return (
             <button
               key={session.id}
+              data-thread-id={session.id}
               className={`session-card ${selectedThreadId === session.id ? 'active' : ''} ${sessionRunning ? 'running' : ''} ${completedUnread ? 'completed-unread' : ''}`}
               onClick={() => onSelect(session)}
             >
@@ -133,13 +167,14 @@ export const SessionSidebar = memo(function SessionSidebar({
                   className={projectName ? 'session-project' : 'session-project placeholder'}
                   title={projectName ? session.cwd : undefined}
                 >
-                  {projectName || 'General session'}
+                  {projectName || t('普通会话', 'General session')}
                 </span>
                 <time>{formatDate(session.updatedAt)}</time>
               </span>
             </button>
           );
-        })}
+        })}</div>}
+        </section>)}
         {!visibleSessions.length && <p className="empty-list">{t('没有匹配的会话', 'No matching sessions')}</p>}
       </nav>
     </aside>

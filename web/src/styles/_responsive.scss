@@ -8,7 +8,7 @@
       position: fixed;
       z-index: 30;
       inset: 0 auto 0 0;
-      width: min(74vw, 280px);
+      width: min(calc(100vw - 48px), 308px);
       padding: calc(14px + env(safe-area-inset-top)) 12px calc(10px + env(safe-area-inset-bottom));
       transform: translateX(-105%);
       transition: transform .2s ease;
@@ -18,9 +18,14 @@
     }
     .sidebar-head {
       gap: 8px;
-      .eyebrow { font-size: 9px; letter-spacing: .13em; }
+      .eyebrow { font-size: 18px; letter-spacing: -.02em; }
     }
-    .sidebar-tool { width: 30px; height: 30px; flex-basis: 30px; }
+    .sidebar-tool { width: 40px; height: 44px; flex-basis: 40px; }
+    .project-group-heading { min-height: 44px; }
+    .session-card { min-height: 52px; }
+    .icon-button { width: 44px; height: 44px; flex-basis: 44px; }
+    .session-identity { max-width: 100%; }
+    .session-identity summary { min-height: 22px; }
     .sidebar-actions { gap: 3px; }
     .drawer-backdrop { position: fixed; z-index: 25; inset: 0; display: block; padding: 0; border: 0; background: rgba(0, 0, 0, .62); }
     .topbar { min-height: 64px; padding: calc(8px + env(safe-area-inset-top)) 12px 8px; }
@@ -71,6 +76,7 @@
       > small { display: none; }
     }
     .composer { border-radius: 15px; }
+    .composer textarea, .compact-search input { font-size: 16px; }
     .image-preview { margin-bottom: 7px; }
   }
 }

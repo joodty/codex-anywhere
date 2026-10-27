@@ -52,6 +52,7 @@ import {
   type TurnDiffDocument,
 } from './turn-diffs.js';
 import { loadSessionModelSettings, saveSessionModelSettings } from './session-model-settings.js';
+import { readDesktopProjects } from './desktop-projects.js';
 
 const RPC_TIMEOUT_MS = 20_000;
 const SUMMARY_LIMIT = 4_000;
@@ -246,10 +247,13 @@ export class CodexAppServer extends EventEmitter {
       sortDirection: 'desc',
       archived: false,
       useStateDbOnly: true,
-      sourceKinds: ['cli', 'vscode', 'appServer', 'exec'],
+      // One-shot `codex exec` runs include QA traces that are not desktop chats.
+      // Keep normal desktop/CLI/app-server conversations in the workbench.
+      sourceKinds: ['cli', 'vscode', 'appServer'],
       ...(cwd ? { cwd: process.platform === 'win32' ? [cwd, cwd.toLowerCase()] : cwd } : {}),
     });
     const rows: JsonObject[] = Array.isArray(result?.data) ? result.data : [];
+    const catalog = await readDesktopProjects();
     return rows.map((thread: JsonObject) => {
       const threadCwd = thread.cwd || cwd;
       if (thread.id) this.sessionMetadata.set(thread.id, {
@@ -262,6 +266,8 @@ export class CodexAppServer extends EventEmitter {
         title: thread.name || thread.title || thread.preview || thread.id,
         preview: thread.preview || '',
         cwd: threadCwd,
+        project: catalog.projects.get(catalog.assignments.get(thread.id) || '') || null,
+        desktopCatalogAvailable: catalog.projects.size > 0,
         updatedAt: thread.recencyAt || thread.updatedAt || thread.createdAt || null,
         status: thread.status?.type || 'unknown',
         canAcceptDirectInput: thread.canAcceptDirectInput !== false,

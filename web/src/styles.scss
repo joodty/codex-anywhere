@@ -5,10 +5,10 @@
 @use './async-question-card.css';
 
 :root {
-  color: #e8edf7;
+  color: #ececec;
   background: $page-bg;
   color-scheme: dark;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -120,6 +120,7 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
 .wide { height: 48px; margin-top: 4px; border-radius: 12px; font-weight: 700; }
 .login-status { min-height: 20px; margin-top: 16px; color: #8793a5; font-size: 13px; text-align: center; }
 .pair-device-button { width: 100%; height: 44px; border: 1px solid #303a4c; border-radius: 12px; color: #b9c7dc; background: #111826; font-weight: 700; }
+.owner-connect { display: grid; place-items: center; min-height: 48px; margin-bottom: 12px; border-radius: 12px; color: #202020; background: #ececec; text-decoration: none; font-weight: 600; }
 .pair-device-button { @include interaction.hover { border-color: #466086; color: #e5edfa; background: #172133; } }
 .pairing-dialog-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(3, 6, 12, .78); backdrop-filter: blur(10px); }
 .pairing-dialog { width: min(480px, 100%); max-height: calc(100dvh - 36px); overflow-y: auto; border: 1px solid #2a3548; border-radius: 20px; background: #0e1522; box-shadow: 0 28px 90px rgba(0, 0, 0, .58); }
@@ -146,7 +147,7 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
   width: 100%;
   height: 100dvh;
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
   overflow: hidden;
   background: $page-bg;
 }
@@ -154,9 +155,9 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 16px 18px 14px;
+  padding: 16px 12px 14px;
   border-right: 1px solid $panel-divider;
-  background: #0d111b;
+  background: #171717;
   overflow: hidden;
 }
 .sidebar-head {
@@ -166,11 +167,26 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
   gap: 10px;
   margin-bottom: 4px;
   padding-bottom: 6px;
-  border-bottom: 1px solid rgba(79, 97, 128, .38);
+  border-bottom: 0;
 
   > div:first-child { min-width: 0; }
-  .eyebrow { margin: 0; white-space: nowrap; }
+  .eyebrow { margin: 0; color: #eee; font-size: 18px; font-weight: 600; letter-spacing: -.02em; white-space: nowrap; }
 }
+.web-label { margin-left: 5px; color: #939393; font-size: 11px; font-weight: 400; letter-spacing: 0; }
+.project-section-label { padding: 18px 10px 8px; color: #939393; font-size: 12px; }
+.project-group { min-width: 0; margin-bottom: 9px; }
+.project-group-heading { width: 100%; min-height: 38px; display: flex; align-items: center; gap: 7px; padding: 5px 8px; border: 0; border-radius: 7px; color: #ccc; background: transparent; text-align: left; font-size: 13px; }
+.project-group-heading:hover { background: #252525; }
+.project-group-heading > span:not(.project-chevron) { min-width: 0; @include truncate; }
+.project-group-heading svg { width: 16px; height: 16px; flex-shrink: 0; color: #999; }
+.project-group-heading small { margin-left: auto; color: #888; font-size: 11px; }
+.project-chevron { width: 10px; color: #888; }
+.project-chats { padding-left: 17px; }
+.session-identity { position: relative; min-width: 0; color: #a5a5a5; font-size: 11px; }
+.session-identity summary { overflow: hidden; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
+.session-identity summary > span { color: #858585; }
+.session-identity > div { position: absolute; z-index: 20; top: calc(100% + 8px); left: 0; width: min(580px, 75vw); display: grid; gap: 6px; padding: 16px; border: 1px solid #444; border-radius: 12px; background: #252525; box-shadow: 0 8px 24px #0006; }
+.session-identity code { color: #e5e5e5; overflow-wrap: anywhere; user-select: text; font-size: 12px; }
 .icon-button {
   width: 30px;
   height: 30px;
@@ -395,20 +411,20 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
   width: 100%;
   display: grid;
   gap: 4px;
-  padding: 9px 10px;
+  padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 10px;
   color: #b6c1d1;
   background: transparent;
   text-align: left;
 
-  @include interaction.hover { background: #141a26; }
-  &.active { border-color: #2f5daa; background: #18243a; }
-  &.running:not(.active) { border-color: rgba(57, 201, 121, .24); background: rgba(28, 76, 53, .12); }
+  @include interaction.hover { background: #252525; }
+  &.active { border-color: transparent; background: #303030; }
+  &.running:not(.active) { background: #202520; }
   &.completed-unread:not(.active) { background: rgba(54, 93, 158, .12); }
 
   & + &::before {
-    content: '';
+    content: none;
     position: absolute;
     top: -2px;
     right: 10px;
@@ -418,7 +434,7 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
     pointer-events: none;
   }
 }
-.session-title { min-width: 0; @include truncate; color: #e8edf5; font-size: 14px; font-weight: 680; line-height: 1.32; }
+.session-title { min-width: 0; @include truncate; color: #dedede; font-size: 13px; font-weight: 400; line-height: 1.4; }
 .new-session-dialog-actions .delete-session-confirm { background: #a63d4b; border-color: #a63d4b; color: #fff; }
 .session-meta { min-width: 0; display: flex; align-items: center; gap: 6px; color: #657287; font-size: 10px; }
 .session-project {
@@ -433,7 +449,7 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
 @keyframes session-running-pulse { 0% { box-shadow: 0 0 0 0 rgba(57, 201, 121, .42); } 70%, 100% { box-shadow: 0 0 0 6px rgba(57, 201, 121, 0); } }
 .empty-list { color: #6f7b8d; text-align: center; }
 
-.conversation { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto auto; overflow: hidden; background: #0a0e16; }
+.conversation { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto auto; overflow: hidden; background: #1b1b1b; }
 .topbar {
   position: relative;
   z-index: 12;
@@ -443,13 +459,13 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
   gap: 12px;
   padding: 12px 22px;
   border-bottom: 1px solid $panel-divider;
-  background: rgba(11, 15, 24, .92);
+  background: #1b1b1b;
   backdrop-filter: blur(12px);
 }
-.topbar::before { width: 30px; height: 30px; flex: 0 0 30px; content: ''; }
+.topbar::before { display: none; }
 .conversation-heading { position: relative; min-width: 0; flex: 1; display: grid; gap: 3px; }
 .conversation-controls { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; }
-.conversation-title { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; }
+.conversation-title { min-width: 0; display: flex; align-items: center; justify-content: flex-start; gap: 7px; }
 .conversation-title > strong { @include truncate; min-width: 0; font-size: 15px; }
 .session-rename-button {
   width: 22px; height: 22px; flex: 0 0 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; color: #728098; background: transparent;
@@ -911,20 +927,19 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
 
 
   &.user {
-    --bubble-tail-color: #2b55a3;
-    border-radius: 18px 18px 5px 18px; color: #fff;
-    background: linear-gradient(135deg, #2f62bd 0%, var(--bubble-tail-color) 82%, var(--bubble-tail-color) 100%);
-    box-shadow: 0 7px 20px rgba(18, 42, 92, .16); line-height: 1.5;
+    --bubble-tail-color: #303030;
+    border-radius: 18px; color: #ececec;
+    background: var(--bubble-tail-color);
+    line-height: 1.6;
   }
   &.user > p:first-of-type { margin-top: 0; }
   &.assistant {
-    --bubble-tail-color: #131925;
-    border-radius: 18px 18px 18px 5px; color: #c8d1df; background: var(--bubble-tail-color);
-    box-shadow: 0 7px 22px rgba(2, 7, 15, .16);
+    --bubble-tail-color: transparent;
+    border-radius: 0; color: #e3e3e3; background: transparent;
     transition: box-shadow .35s ease;
   }
   &.user::before, &.assistant::before {
-    position: absolute; bottom: 0; width: 9px; height: 10px; pointer-events: none; content: '';
+    position: absolute; bottom: 0; width: 9px; height: 10px; pointer-events: none; content: none;
     background: var(--bubble-tail-color);
   }
   &.user::before { right: -4px; clip-path: polygon(0 0, 100% 100%, 0 100%); }
@@ -1349,7 +1364,7 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
 .image-upload-progress progress::-moz-progress-bar { background: #68a3fa; border-radius: 4px; }
 .image-preview button { width: 30px; height: 30px; border: 0; border-radius: 9px; color: #aeb9c9; background: #1d2533; font-size: 20px; }
 .composer {
-    width: 100%; min-width: 0; max-width: $content-width; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 7px; align-items: end; margin: 0 auto; padding: 8px; overflow: hidden; border: 1px solid #303a4d; border-radius: 17px; background: #111722;
+    width: 100%; min-width: 0; max-width: $content-width; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 7px; align-items: end; margin: 0 auto; padding: 8px; overflow: hidden; border: 1px solid #444; border-radius: 20px; background: #252525;
 
   &:focus-within { border-color: #4777db; box-shadow: 0 0 0 3px rgba(55, 111, 232, .12); }
   textarea {
@@ -1367,7 +1382,7 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
   .attach-button:disabled, .image-preview button:disabled { opacity: .45; }
   .composer-actions { position: relative; display: flex; align-items: center; gap: 5px; }
   .send-button { width: 40px; height: 40px; display: grid; place-items: center; border: 0; border-radius: 12px; padding: 0; color: white; font-size: 22px; font-weight: 800; line-height: 1; }
-.send-button { position: relative; background: #356dde; }
+.send-button { position: relative; background: #ececec; color: #202020; }
 .send-button svg { position: relative; z-index: 1; width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .send-button.uploading:disabled { opacity: 1; }
 .send-button.uploading::after { content: ""; position: absolute; inset: 4px; border: 2px solid rgba(255, 255, 255, .22); border-top-color: #fff; border-radius: 50%; animation: send-image-spin .8s linear infinite; }

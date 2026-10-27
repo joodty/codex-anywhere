@@ -20,6 +20,18 @@ export function followLabel(state: FollowState) {
 }
 
 export function friendlyError(error: unknown) {
+  const queueErrors: Record<string, string> = {
+    queue_message_changed: t('这条排队消息已在其他页面更新，请刷新队列后重试。', 'This queued message changed elsewhere. Refresh and retry.'),
+    queue_message_locked: t('这条消息已经开始发送，无法再编辑或撤回。', 'This message is already being sent and cannot be edited or removed.'),
+    queue_needs_review: t('请先处理发送失败或结果待确认的消息，再继续队列。', 'Review failed or uncertain messages before resuming.'),
+    queue_archive_pending: t('此会话仍有排队消息，请先处理或撤回，再归档。', 'Handle or remove queued messages before archiving this chat.'),
+    queue_limit: t('队列已满：每个会话最多 30 条，请先处理已有消息。', 'Queue is full. Handle existing messages first (30 per chat).'),
+    queue_storage_unavailable: t('本机队列无法保存，已停止自动发送。请检查本机磁盘或重启连接器。', 'Local queue storage is unavailable. Automatic sending stopped; check disk or restart the connector.'),
+    queue_message_invalid: t('排队消息内容无效，请检查文字和附件后重试。', 'Check the queued text and attachments and retry.'),
+    queue_unsupported: t('当前连接器未启用消息队列，请检查本机版本。', 'This connector does not support message queues.'),
+  };
+  const queueMessage = error instanceof Error ? error.message : String(error);
+  if (queueErrors[queueMessage]) return queueErrors[queueMessage];
   const deletionErrors: Record<string, string> = {
     session_delete_turn_active: t('该会话仍在运行，请先停止任务或等待完成后再删除。', 'Stop this session or wait for it to finish before deleting it.'),
     session_delete_in_progress: t('该会话正在删除，请稍候。', 'This session is being deleted. Please wait.'),

@@ -2,6 +2,7 @@ import { editIdentifier, editText } from './message-edit.js';
 import { publicError } from '../shared/protocol.js';
 import { measureOperation, operationMetrics } from './operation-metrics.js';
 import type { DesktopControls } from './desktop-controls.js';
+import type { MessageQueue } from './message-queue.js';
 import type { FileUploadManager } from './file-uploads.js';
 import type { BrowserSessionBroker } from '../browser-control/session-broker.js';
 import { SESSION_STATUS_MAX_AGE_MS, type SessionStatusSnapshot } from '../shared/session-status.js';
@@ -61,6 +62,7 @@ type DesktopGateway = {
   restoreThread?(options: Payload): Promise<any>;
 };
 type Dependencies = {
+  queue?: MessageQueue;
   onSessionStatuses?(snapshot: SessionStatusSnapshot): void;
   browser?: BrowserSessionBroker;
   codex: CodexGateway;
@@ -107,7 +109,7 @@ async function headerModelCatalog(codex: CodexGateway) {
 }
 
 export function createRequestHandler({
-  codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, browser,
+  codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, browser, queue,
   deviceLabel = deviceId, mode = desktop ? 'desktop' : 'headless',
   networkAccess = false, allowFullAccess = false, onSessionStatuses,
 }: Dependencies) {
@@ -142,7 +144,7 @@ export function createRequestHandler({
     try {
       const run = () => dispatchAction({
         action, payload, requestId, clientId, clientDeviceId,
-        codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser,
+        codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser, queue,
         networkAccess, allowFullAccess, getDesktopStatuses, refreshDesktopThreads,
       });
       const data = await (MEASURED_ACTIONS.has(action) ? measureOperation(action, run) : run());
@@ -155,7 +157,7 @@ export function createRequestHandler({
 
 async function dispatchAction({
   action, payload, requestId, clientId, clientDeviceId,
-  codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser,
+  codex, desktop, attachments, fileUploads, visualizations, downloads, deviceId, deviceLabel, mode, browser, queue,
   networkAccess, allowFullAccess, getDesktopStatuses, refreshDesktopThreads,
 }: DispatchContext) {
   if (action === 'connector.diagnostics') return { operations: operationMetrics() };
@@ -189,12 +191,30 @@ async function dispatchAction({
       codexOnline: Boolean(codex.child),
       ...(mode === 'desktop' ? { desktopOnline: desktopState?.available === true, desktopTools: desktopState?.tools || [], desktopInputOnline: desktopState?.inputAvailable === true } : {}),
       activeTurn: codex.activeTurns.size > 0,
-      capabilities: { sessionDelete: mode === 'headless', networkAccess, fullAccess: allowFullAccess,
+      capabilities: { ...(queue ? { messageQueue: true } : {}), sessionDelete: mode === 'headless', networkAccess, fullAccess: allowFullAccess,
         ...(mode === 'desktop' && desktop?.controls && desktopState?.inputAvailable ? { desktopNativeState: true, desktopNativeImages: Boolean(attachments.nativeInput) } : {}),
         ...(mode === 'desktop' && desktop?.archiveThread && supports('read_thread', 'set_thread_archived') ? { sessionArchive: true, sessionArchivePendingApproval: true } : {}),
         ...(mode === 'desktop' && desktop?.restoreThread && supports('set_thread_archived') ? { sessionRestore: true } : {}),
         ...(fileUploads ? { fileUpload: true } : {}), ...(browser ? { browserControl: true, browserGrantReplacement: true } : {}) },
     };
+  }
+  if (action.startsWith('queue.')) {
+    if (!queue || mode !== 'desktop') throw new Error('queue_unsupported');
+    const threadId = String(payload.threadId || '');
+    if (action === 'queue.list') return queue.list(threadId);
+    if (action === 'queue.add') {
+      await codex.readSession(threadId);
+      if (Array.isArray(payload.images)) for (const image of payload.images) {
+        if (!attachments.nativeInput) throw new Error('desktop_image_unsupported');
+        await attachments.nativeInput(image);
+      }
+      return queue.add({ ...payload, threadId });
+    }
+    if (action === 'queue.edit') return queue.edit(payload);
+    if (action === 'queue.remove') return queue.remove(payload);
+    if (action === 'queue.pause') return queue.pause(threadId);
+    if (action === 'queue.resume') return queue.resume(threadId);
+    throw new Error('unsupported_action');
   }
   if (action === 'sessions.list') {
     const sessions = await codex.listSessions({ cwd: payload.cwd });
@@ -211,6 +231,7 @@ async function dispatchAction({
   }
   if (action === 'session.read') return codex.readSession(String(payload.threadId || ''));
   if (action === 'session.archive') {
+    if (queue?.list(String(payload.threadId || '')).items.length) throw new Error('queue_archive_pending');
     if (mode !== 'desktop' || !desktop?.archiveThread) throw new Error('session_archive_unsupported');
     if (payload.confirm !== true) throw new Error('session_archive_confirmation_required');
     const threadId = String(payload.threadId || '').trim();
@@ -387,6 +408,7 @@ async function dispatchAction({
     return desktop.controls.read(String(payload.threadId || ''));
   }
   if (action === 'turn.stop') {
+    if (payload.threadId && queue?.list(String(payload.threadId)).items.length) queue.pause(String(payload.threadId), '任务已手动停止，后续消息保持排队。');
     if (payload.source === 'desktop') {
       if (mode !== 'desktop' || !desktop?.controls) throw new Error('desktop_input_unsupported');
       return desktop.controls.stop(String(payload.threadId || ''), payload.expectedTurnId);
@@ -468,6 +490,7 @@ async function startTurn({
     threadId,
     text,
     requestId,
+    ...(payload.queueDispatch === true ? { idleOnly: true } : {}),
     ...(imagePaths.length === 1 ? { imagePath: imagePaths[0] } : imagePaths.length ? { imagePaths } : {}),
   }));
 }

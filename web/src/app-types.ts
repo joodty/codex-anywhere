@@ -43,7 +43,7 @@ export type ConnectorStatus = {
   codexOnline: boolean;
   desktopOnline?: boolean;
   activeTurn: boolean;
-  capabilities: { networkAccess: boolean; fullAccess: boolean; fileUpload?: boolean; sessionArchive?: boolean; sessionDelete?: boolean;
+  capabilities: { messageQueue?: boolean; networkAccess: boolean; fullAccess: boolean; fileUpload?: boolean; sessionArchive?: boolean; sessionDelete?: boolean;
     sessionArchivePendingApproval?: boolean; sessionRestore?: boolean; desktopNativeImages?: boolean; desktopNativeState?: boolean };
 };
 export type SessionPermissionConfig = {

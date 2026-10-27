@@ -22,6 +22,7 @@ type DesktopMessage = {
   thinking?: unknown;
   imagePath?: string;
   imagePaths?: string[];
+  idleOnly?: boolean;
 };
 export type DesktopThreadStatus = { id: string; status: string };
 type ToolCall = { tool: string; arguments: JsonObject; callerThreadId: string; callId: string };
@@ -43,16 +44,17 @@ export class CodexDesktopClient {
     this.controls = new DesktopControls(this.userInput);
   }
 
-  async sendMessage({ threadId, text, requestId, model, thinking, imagePath, imagePaths }: DesktopMessage) {
+  async sendMessage({ threadId, text, requestId, model, thinking, imagePath, imagePaths, idleOnly }: DesktopMessage) {
     const targetThreadId = requireThreadId(threadId);
     const prompt = String(text || '').trim();
     if (!prompt) throw new Error('message_required');
-    await this.userInput.send({ threadId: targetThreadId, text: prompt, requestId, ...(imagePath ? { imagePath } : {}),
+    const result = await this.userInput.send({ threadId: targetThreadId, text: prompt, requestId, ...(imagePath ? { imagePath } : {}),
       ...(imagePaths?.length ? { imagePaths } : {}),
+      ...(idleOnly ? { idleOnly } : {}),
       model: String(model || '').trim() || undefined,
       thinking: String(thinking || '').trim() || undefined,
     });
-    return { threadId: targetThreadId, delivery: 'desktop' };
+    return { threadId: targetThreadId, delivery: 'desktop', ...(idleOnly ? { turnId: result.turnId } : {}) };
   }
 
   async renameThread({ threadId, name }: {

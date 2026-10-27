@@ -99,6 +99,27 @@ test('native image inputs carry a localImage part for both running and idle deli
   });
 });
 
+test('queued native delivery refuses an active turn and uses start without any steer request', async () => {
+  const writes: string[] = [];
+  await host((r, socket) => {
+    if (standard(r, socket)) return;
+    writes.push(r.method);
+    assert.equal(r.method, 'thread-follower-start-turn');
+    reply(socket, r, { result: { turn: { id: 'queued-turn' } } });
+  }, async pipe => {
+    const input = new DesktopUserInput(async () => assert.fail(), 1000, pipe);
+    let status = 'active';
+    input.state.read = async () => ({ threadRuntimeStatus: { type: status }, requests: [] });
+    try {
+      await assert.rejects(input.send({ ...message, idleOnly: true }), /queue_thread_busy/);
+      assert.equal(writes.length, 0);
+      status = 'idle';
+      assert.deepEqual(await input.send({ ...message, idleOnly: true }), { turnId: 'queued-turn' });
+      assert.deepEqual(writes, ['thread-follower-start-turn']);
+    } finally { input.close(); }
+  });
+});
+
 test('idle input uses the existing owner and normal input, without toolOutput or a second writer', async () => {
   const writes: any[] = [];
   await host((r, socket) => {

@@ -43,6 +43,7 @@ import { useAttachmentDraft } from './attachment-draft';
 import { useAttachmentQueue } from './attachment-queue';
 import { readLocal, writeLocal, useComposerDraft } from './personal-state';
 import { ConnectionNotice } from './connection-notice';
+import { MessageQueuePanel, useMessageQueue } from './message-queue';
 import { useFileTransfer } from './file-transfer';
 import { useFilePreviews } from './file-preview-client';
 import { restoreOwnedTurn } from './owned-turn';
@@ -583,6 +584,9 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     openPermissionSettingsOnDesktop,
   } = useSessionConfiguration({ environmentId, online, threadId, request, desktopState,
     recoveryKey: `${connectionEpoch}:${resumeEpoch}` });
+  const queueSupported = connectorStatus?.capabilities.messageQueue === true;
+  const messageQueue = useMessageQueue({ environmentId, threadId, online, supported: queueSupported, request });
+  const queueRefreshRef = useRef(messageQueue.refresh); queueRefreshRef.current = messageQueue.refresh;
 
   const replayPendingRequests = useCallback(() => {
     if (!secureChannelRef.current?.isReady()) return 0;
@@ -766,6 +770,10 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       executionVersionRef.current += 1;
     }
     const payload = message.payload || {};
+    if (message.event === 'queue.changed') {
+      if (payload.threadId === threadIdRef.current) void queueRefreshRef.current();
+      return;
+    }
     if (message.event === 'sessions.status') {
       if (sessionStatusesRef.current.accept(payload as SessionStatusSnapshot)) {
         setSessions(current => sessionStatusesRef.current.apply(current,
@@ -1785,15 +1793,16 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     newSessionAutoSendRef.current = true;
   }, [closeNewSessionDialog, newSessionCwd, newSessionAttachment, newSessionPrompt, newSessionPermissionMode, online, uploading, connectorStatus?.capabilities.fullAccess, selectSession, setNewSessionAttachment, setPendingAttachment]);
 
-  const sendTurn = useCallback(async (questionReplies?: QuestionReply[]) => {
+  const sendTurn = useCallback(async (questionReplies?: QuestionReply[], intent: 'auto' | 'immediate' = 'auto') => {
     // A question response is independent of the message/attachment draft.
     if (questionReplies && (!threadId || threadId !== threadIdRef.current)) return;
     const text = questionReplies ? buildQuestionReply(questionReplies) : prompt.trim();
     const attachments = questionReplies ? [] : pendingAttachments;
     const attachment = attachments[0] || null;
     const targetThreadId = threadIdRef.current;
+    const enqueue = !questionReplies && intent === 'auto' && Boolean(targetThreadId) && queueSupported;
     const sendKey = JSON.stringify([environmentIdRef.current, targetThreadId || NEW_TURN_KEY]);
-    const steering = canSteerOwnedTurn(
+    const steering = !enqueue && canSteerOwnedTurn(
       running, executionState, ownedTurnThreadId, targetThreadId,
     );
     const directDesktopDelivery = canSendToActiveDesktopTurn(
@@ -1803,7 +1812,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       (!text && !attachment)
       || uploading
       || sendingRef.current.has(sendKey)
-      || (running && !steering)
+      || (running && !steering && !enqueue)
       || (steering && Boolean(attachment))
     ) return;
     const isExistingSession = Boolean(targetThreadId);
@@ -1880,6 +1889,24 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         if (targetThreadId) rememberAttachment(targetThreadId, visibleText, timelineAttachment);
       }
       if (uploadOwnerRef.current === delivery.id) { setUploading(false); uploadOwnerRef.current = null; }
+      if (enqueue) {
+        const pendingKey = 'personal.queueSubmission.' + sendKey;
+        const signature = JSON.stringify([text, imageQuality, attachments.map(item => [item.file.name, item.file.size, item.file.lastModified])]);
+        const previous = readLocal<{ id: string; signature: string } | null>(pendingKey, null);
+        const id = previous?.signature === signature ? previous.id : makeId();
+        writeLocal(pendingKey, { id, signature });
+        const accepted = await request<{ accepted: boolean; threadId: string }>('queue.add', {
+          id, threadId: targetThreadId, text: turnText, images: nativeImages, files: attachments.map(item => item.file.name),
+          ...(desktopState?.turnId ? { afterTurnId: desktopState.turnId } : {}),
+        });
+        if (!accepted.accepted || accepted.threadId !== targetThreadId) throw new Error('queue_message_invalid');
+        writeLocal(pendingKey, null);
+        if (boundPaths.length) void request('attachment.bind', { threadId: targetThreadId, paths: boundPaths }).catch(() => reportTimelineError(new Error('附件已保留，但会话关联未完成。')));
+        if (isCurrentSessionRequest(targetThreadId, threadIdRef.current, selectionVersion, selectedRequestRef.current)) {
+          setPrompt(''); setPendingAttachments([]); setMessageDelivery(null); void queueRefreshRef.current();
+        }
+        return true;
+      }
       if (!questionReplies) {
         setPrompt('');
         setPendingAttachment(null);
@@ -2019,7 +2046,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     }
   }, [
     addTimeline, connectorStatus, executionState, modelConfig, newSessionCwd, ownedTurnThreadId, pendingAttachments, imageQuality,
-    permissionConfig, prompt, threadId,
+    permissionConfig, prompt, threadId, queueSupported, desktopState, setPendingAttachments, setPrompt,
     loadHistory, refreshSessions, rememberAttachment, rememberImage, reportTimelineError, request, resetExecution, running,
     updateExecution, updateSessionAttention, uploading,
   ]);
@@ -2230,6 +2257,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     running, ownedTurnThreadId, threadId || (creatingNewSession ? NEW_TURN_KEY : null),
   ) || Boolean(desktopState?.canStop);
   const executionActive = executionState === 'running' || executionState === 'waiting';
+  const showQueueSend = queueSupported && Boolean(threadId) && (executionActive || Boolean(messageQueue.queue?.items.length));
   const deliveryReceipt = useDeliveryNotice(
     visibleDelivery(messageDelivery, environmentId, threadId, selectedRequestRef.current),
     JSON.stringify([executionState, liveActivity, toolPurpose, activityDetail, turnProgress]),
@@ -2614,6 +2642,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         )}
 
         {(threadId || creatingNewSession) && <footer className="composer-wrap">
+          {queueSupported && threadId && <MessageQueuePanel key={`${environmentId}:${threadId}`} queue={messageQueue.queue} error={messageQueue.error} online={online} change={messageQueue.change} />}
           <ConnectionNotice relayConnected={socketAuthenticatedRef.current} connectorConnected={online} desktop={connectorStatus?.mode === 'desktop'} desktopOnline={connectorStatus?.desktopOnline} />
           {!draftSaved && prompt && <p className="connection-notice" role="status">{t('当前浏览器无法保存草稿，请先复制文字再刷新。', 'This browser cannot save the draft. Copy your text before refreshing.')}</p>}
           {!!pendingAttachments.length && <div className="attachment-controls">
@@ -2632,7 +2661,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
               <button
                 type="button"
                 onClick={() => setPendingAttachments(items => items.filter((_, i) => i !== index))}
-                disabled={uploading || running}
+                disabled={uploading || (running && !queueSupported)}
                 aria-label={`${t('移除附件', 'Remove attachment')} ${index + 1}`}
               >×</button>
             </div>
@@ -2650,13 +2679,13 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
                 event.target.value = '';
                 void chooseAttachment(files);
               }}
-              disabled={running || uploading}
+              disabled={(running && !queueSupported) || uploading}
             />
             <button
               className="attach-button"
               type="button"
               onClick={() => attachmentInputRef.current?.click()}
-              disabled={running || uploading}
+              disabled={(running && !queueSupported) || uploading}
               aria-label={t('添加附件', 'Add attachment')}
               title={t('最多 6 个附件，图片最大 32 MB，其他文件最大 100 MB', 'Up to 6 attachments; images 32 MB, other files 100 MB')}
             >＋</button>
@@ -2664,7 +2693,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
               rows={1}
               value={prompt}
               onPaste={(event) => {
-                if (running || uploading) return;
+                if ((running && !queueSupported) || uploading) return;
                 const file = getClipboardImage(event.clipboardData);
                 if (!file) return;
                 event.preventDefault();
@@ -2676,6 +2705,8 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
               }}
               placeholder={uploading
                 ? t('正在上传附件…', 'Uploading attachment…')
+                : queueSupported && threadId && (executionActive || Boolean(messageQueue.queue?.items.length))
+                  ? t('写好下一条消息，当前任务结束后发送…', 'Write the next message; it will send when this run ends…')
                 : steeringAvailable
                   ? t('向当前任务追加指令…', 'Steer the current run…')
                   : directDesktopDeliveryAvailable
@@ -2684,27 +2715,34 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
               disabled={uploading}
             />
             <div className="composer-actions">
+              {queueSupported && threadId && executionActive && <button type="button" className="queue-immediate-button" disabled={!online || uploading || !prompt.trim() || Boolean(pendingAttachment)}
+                onClick={() => void sendTurn(undefined, 'immediate')} aria-label={t('立即追加', 'Send immediately')} title={t('立即交给当前任务，可能改变它正在进行的工作', 'Send to the current run immediately; this may change its work')}>
+                {t('立即追加', 'Send now')}</button>}
               <button
-                  className={`send-button${uploading ? ' uploading' : ''}`}
+                  className={`send-button${uploading ? ' uploading' : ''}${showQueueSend ? ' queue-send' : ''}`}
                   disabled={
                     !online
                     || uploading
-                    || (running && !steeringAvailable)
+                    || (running && !steeringAvailable && !queueSupported)
                     || (!prompt.trim() && !pendingAttachment)
                     || (!threadId && !newSessionCwd.trim())
                   }
                   onClick={() => void sendTurn()}
                   aria-label={uploading
                     ? t('正在发送附件', 'Sending attachment')
+                    : queueSupported && threadId
+                      ? executionActive || Boolean(messageQueue.queue?.items.length) ? t('加入队列', 'Add to queue') : t('发送', 'Send')
                     : steeringAvailable
                       ? t('追加指令', 'Steer')
                       : t('发送', 'Send')}
                 >
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 5 16 7-16 7 3-7-3-7Zm3 7h13" /></svg>
+                  {showQueueSend && !uploading ? <span>{t('排队', 'Queue')}</span> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 5 16 7-16 7 3-7-3-7Zm3 7h13" /></svg>}
               </button>
             </div>
           </div>
-          <small>{steeringAvailable
+          <small>{queueSupported && threadId
+            ? t('运行中发送默认排队；“立即追加”会影响当前任务。', 'Messages queue during a run. Send now steers the current task.')
+            : steeringAvailable
             ? t('运行中可继续追加文字指令', 'You can steer this run with another text instruction')
             : t('Ctrl/⌘+V 粘贴图片 · Ctrl/⌘+Enter 发送', 'Ctrl/⌘+V to paste an image · Ctrl/⌘+Enter to send')}</small>
         </footer>}

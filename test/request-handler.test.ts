@@ -68,6 +68,12 @@ function request(action, payload = {}) {
   return { action, payload, requestId: 'request-1', clientId: 'client-1' };
 }
 
+test('stopping a pending new turn without a thread id does not look up an invalid queue', async () => {
+  const handler = createRequestHandler({ ...createDependencies(), queue: { list: () => assert.fail('pending new turn has no queue target') } as any });
+  const response = await handler(request('turn.stop'));
+  assert.equal(response.ok, true);
+});
+
 test('Desktop controls route native models, exact-turn stop and request-scoped approval without app-server mutations', async () => {
   const calls: any[] = [];
   const native = { read: async id => ({ threadId: id, approvals: [], waitingOnApproval: false }),

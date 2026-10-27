@@ -4,7 +4,9 @@ import { startBrowserEndpoint } from '../browser-control/local-endpoint.js';
 import { CodexAppServer } from './codex-app-server.js';
 import { CodexDesktopClient } from './codex-desktop.js';
 import { readImageAttachment, saveImageAttachment, resolveNativeImageAttachment, prepareRetainedImage } from './attachments.js';
-import { MANAGED_ROOTS, retainLegacyFiles, originalRetainedFile, bindRetainedFiles } from './retained-files.js';
+import { DATA_DIRECTORY, MANAGED_ROOTS, retainLegacyFiles, originalRetainedFile, bindRetainedFiles } from './retained-files.js';
+import { join } from 'node:path';
+import { MessageQueue, queueRequestId } from './message-queue.js';
 import { desktopSummary } from './desktop-controls.js';
 import { FileUploadManager } from './file-uploads.js';
 import { loadConnectorConfig } from './config.js';
@@ -64,7 +66,26 @@ const browser = process.env.BRIDGE_BROWSER_ENDPOINT_FILE
   ? new BrowserSessionBroker(deviceId, (frame) => secureChannels.sendEvent(frame)) : undefined;
 const browserEndpoint = browser
   ? await startBrowserEndpoint(browser, process.env.BRIDGE_BROWSER_ENDPOINT_FILE!) : undefined;
+const messageQueue = desktop ? new MessageQueue({
+  path: join(DATA_DIRECTORY, 'queued-messages.json'),
+  state: async threadId => {
+    const { state, summary } = await desktop.controls.snapshot(threadId, false, true);
+    const turns = [...(state.turns || []), ...Object.values(state.turnHistory?.history?.entitiesByKey || {})] as Array<Record<string, any>>;
+    const unique = new Map(turns.filter(turn => turn.turnId || turn.id).map(turn => [turn.turnId || turn.id, turn]));
+    return { status: summary.status, turnId: summary.turnId,
+      blocked: Boolean(state.requests?.length || state.threadGoal?.status === 'active'),
+      turns: [...unique.values()].map(turn => ({ id: turn.turnId || turn.id, status: turn.status })) };
+  },
+  send: async item => {
+    const response = await handleRequest({ action: 'turn.start', requestId: queueRequestId(item.id),
+      payload: { threadId: item.threadId, text: item.text, images: item.images, queueDispatch: true } });
+    if (!response.ok) throw new Error(response.error);
+    return { turnId: response.data?.turnId };
+  },
+  changed: threadId => secureChannels.broadcastEvent({ type: 'event', event: 'queue.changed', payload: { threadId } }),
+}) : undefined;
 const handleRequest = createRequestHandler({
+  queue: messageQueue,
   onSessionStatuses: snapshot => secureChannels.broadcastEvent({ type: 'event', event: 'sessions.status', payload: snapshot }),
   browser,
   codex,
@@ -92,6 +113,7 @@ const secureChannels = new ConnectorSecureChannels({
   send: (frame) => safeSend(socket, frame),
   handleRequest,
 });
+messageQueue?.start();
 
 let socket: WebSocket | undefined;
 let reconnectAttempt = 0;
@@ -192,6 +214,7 @@ function scheduleReconnect() {
 async function shutdown() {
   stopped = true;
   if (reconnectTimer) clearTimeout(reconnectTimer);
+  await messageQueue?.close();
   await browserEndpoint?.close();
   secureChannels.clear();
   socket?.close(1000, 'connector shutdown');

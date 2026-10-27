@@ -4,7 +4,7 @@ import { DesktopState } from './desktop-state.js';
 import { DesktopInputPipe } from './desktop-input-pipe.js';
 import { NativeRequestError } from './desktop-native-pipe.js';
 
-export type UserInput = { threadId: string; text: string; requestId: unknown; model?: string; thinking?: string; imagePath?: string; imagePaths?: string[] };
+export type UserInput = { threadId: string; text: string; requestId: unknown; model?: string; thinking?: string; imagePath?: string; imagePaths?: string[]; idleOnly?: boolean };
 
 export class DesktopUserInput {
   readonly pipe: DesktopInputPipe;
@@ -22,7 +22,7 @@ export class DesktopUserInput {
     this.state = new DesktopState(statePipe);
   }
 
-  send(input: UserInput): Promise<void> {
+  send(input: UserInput): Promise<{ turnId: string }> {
     const snapshot = { ...input, ...(input.imagePaths ? { imagePaths: [...input.imagePaths] } : {}) };
     const previous = this.queues.get(input.threadId) ?? Promise.resolve();
     const sending = previous.catch(() => {}).then(() => this.deliver(snapshot));
@@ -67,7 +67,7 @@ export class DesktopUserInput {
     }
   }
 
-  private async deliver({ threadId, text, requestId, model, thinking, imagePath, imagePaths }: UserInput) {
+  private async deliver({ threadId, text, requestId, model, thinking, imagePath, imagePaths, idleOnly }: UserInput) {
     let owner: Awaited<ReturnType<DesktopUserInput['owner']>>;
     try { owner = await this.owner(threadId); }
     catch (error) {
@@ -89,8 +89,19 @@ export class DesktopUserInput {
     const restoreMessage = { id, text, createdAt: Date.now(), context: {
       prompt: text, addedFiles: [], fileAttachments: [], imageAttachments: [], ideContext: null,
     } };
+    if (idleOnly) {
+      const state = await this.state.read(threadId, owner.id, 5000, true);
+      if (state.threadRuntimeStatus?.type !== 'idle' || state.requests?.length || state.threadGoal?.status === 'active') throw new Error('queue_thread_busy');
+    }
+    const start = () => this.pipe.request('thread-follower-start-turn', {
+      conversationId: threadId,
+      turnStart: { request: { threadId, input, clientUserMessageId: id },
+        context: { inheritThreadSettings: true, usePermissionSelection: true, restoreMessage } },
+    }, this.timeoutMs, owner.id);
     let response;
     try {
+      if (idleOnly) response = await start();
+      else {
       try {
         // The owner checks active state atomically before mutating. Trying steer
         // first avoids a stale read of Desktop's running/idle state.
@@ -102,16 +113,12 @@ export class DesktopUserInput {
         // No timeout, lost owner, generic host error or missing ack is retried.
         if (!(error instanceof NativeRequestError) || error.code !== 'desktop_host_error'
           || error.message !== `Cannot steer conversation ${threadId} because its active turn already ended`) throw error;
-        response = await this.pipe.request('thread-follower-start-turn', {
-          conversationId: threadId,
-          turnStart: { request: { threadId, input, clientUserMessageId: id },
-            // Use Desktop's current permission selection, rather than letting
-            // its legacy fallback reuse the previous turn's permission profile.
-            context: { inheritThreadSettings: true, usePermissionSelection: true, restoreMessage } },
-        }, this.timeoutMs, owner.id);
+        response = await start();
+      }
       }
       // start returns {turn}; steer returns {turnId}. Both must acknowledge the owner operation.
       if (!response.result?.result?.turn?.id && !response.result?.result?.turnId) throw new NativeRequestError('desktop input invalid acknowledgement', true);
+      return { turnId: response.result.result.turn?.id || response.result.result.turnId };
     } catch (error) {
       if ((error as Error).message === 'desktop_request_too_large') throw error;
       throw classifyDesktopError(error, true);

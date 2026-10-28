@@ -51,7 +51,7 @@ type CodexGateway = {
 };
 type DesktopGateway = {
   controls?: Pick<DesktopControls, 'read' | 'modelConfig' | 'updateModel' | 'stop' | 'respond'>
-    & Partial<Pick<DesktopControls, 'permissions' | 'updatePermissions' | 'editMessage'>>;
+    & Partial<Pick<DesktopControls, 'permissions' | 'updatePermissions' | 'editMessage' | 'snapshot'>>;
   getCapabilities?(): Promise<{ available: boolean; tools: string[]; inputAvailable?: boolean }>;
   listThreads(options: Payload): Promise<DesktopThreadStatus[]>;
   readThreadState(options: Payload): Promise<any>;
@@ -285,6 +285,14 @@ async function dispatchAction({
     if (mode === 'desktop') {
       if (!desktop?.controls || !codex.listModels) throw new Error('desktop_input_unsupported');
       const threadId = String(payload.threadId || '');
+      if (payload.activate === true) {
+        // An explicit model-settings click may wake this Desktop conversation,
+        // without starting a turn. Passive header reads never focus the computer.
+        await codex.readSession(threadId);
+        if (!desktop.controls.snapshot) throw new Error('desktop_input_unsupported');
+        await desktop.controls.snapshot(threadId, true, true);
+        return desktop.controls.modelConfig(threadId, codex.listModels());
+      }
       const catalog = headerModelCatalog(codex);
       try { return await desktop.controls.modelConfig(threadId, catalog); }
       catch (error) {

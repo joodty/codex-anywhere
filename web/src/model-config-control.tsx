@@ -26,6 +26,7 @@ export function ModelConfigControl({
   const [error, setError] = useState('');
   const [draft, setDraft] = useState<ModelConfigDraft | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const openAfterRefreshRef = useRef(false);
   const selectedModel = config?.models.find((model) => model.model === config.model);
   const draftModel = config?.models.find((model) => model.model === draft?.model);
   const effortOptions = reasoningSliderOptions(draftModel);
@@ -34,7 +35,10 @@ export function ModelConfigControl({
   const effortProgress = effortOptions.length > 1 ? (effortIndex / (effortOptions.length - 1)) * 100 : 100;
 
   useEffect(() => {
-    setOpen(false);
+    if (openAfterRefreshRef.current && config && !config.readOnly) {
+      setOpen(true);
+      openAfterRefreshRef.current = false;
+    }
     setError('');
     if (!config) {
       setDraft(null);
@@ -51,7 +55,7 @@ export function ModelConfigControl({
   useEffect(() => {
     if (!open) return undefined;
     const close = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) { openAfterRefreshRef.current = false; setOpen(false); }
     };
     document.addEventListener('pointerdown', close);
     return () => document.removeEventListener('pointerdown', close);
@@ -77,18 +81,24 @@ export function ModelConfigControl({
   const unavailable = hasSession && !config && !loading;
   const displayModel = selectedModel?.displayName || config?.model
     || (unavailable ? t('模型读取失败', 'Model unavailable') : t('自动选择', 'Automatic'));
+  const reload = () => {
+    if (!onRefresh) return;
+    openAfterRefreshRef.current = true;
+    setOpen(true);
+    onRefresh();
+  };
   return (
     <div className={`model-config${open ? ' open' : ''}`} ref={rootRef}>
       <button
         className="model-config-summary"
         type="button"
-        disabled={loading || Boolean(config?.readOnly) || (!config && !(unavailable && onRefresh))}
-        onClick={() => unavailable ? onRefresh?.() : setOpen((current) => !current)}
+        disabled={loading || (Boolean(config?.readOnly) && !onRefresh) || (!config && !(unavailable && onRefresh))}
+        onClick={() => unavailable || config?.readOnly ? reload() : setOpen((current) => !current)}
         aria-expanded={open}
         aria-busy={pending}
         aria-label={pending ? t('正在读取模型和思考强度', 'Loading model and reasoning effort') : undefined}
-        title={config?.source === 'persisted' ? t('上次保存的模型设置；实时设置暂不可用，请在桌面修改', 'Last saved model settings; live settings are unavailable, edit on Desktop')
-          : config?.readOnly ? t('已读取当前模型；完整设置暂不可用，请在桌面修改', 'Current model is available; edit settings on Desktop while full settings are unavailable')
+        title={config?.readOnly && onRefresh ? t('点击加载模型设置，无需先发送消息', 'Load model settings without sending a message')
+          : config?.readOnly ? t('完整模型设置暂不可用', 'Full model settings are unavailable')
           : unavailable ? t('重新读取当前模型', 'Retry reading the current model')
           : disabled ? t('会话执行中，可预选并在结束后保存', 'Preselect now and save after the task finishes') : t('配置后续轮次', 'Configure subsequent turns')}
       >
@@ -105,7 +115,12 @@ export function ModelConfigControl({
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
           </>}
       </button>
-      {open && draft && config && (
+      {open && (!config || config.readOnly) && <div className="model-config-popover">
+        <p role="status">{loading ? t('正在加载模型设置…', 'Loading model settings…') : t('模型设置尚未就绪，可重新加载，无需先发送消息。', 'Model settings are not ready. Reload without sending a message.')}</p>
+        <footer><button type="button" onClick={() => { openAfterRefreshRef.current = false; setOpen(false); }}>{t('取消', 'Cancel')}</button>
+          {onRefresh && <button type="button" disabled={loading} onClick={reload}>{t('重新加载', 'Reload')}</button>}</footer>
+      </div>}
+      {open && draft && config && !config.readOnly && (
         <div className="model-config-popover">
           <div className="model-config-toolbar">
             <button

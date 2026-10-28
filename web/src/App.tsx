@@ -2550,6 +2550,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
             </div>
             <div className="conversation-controls">
               <ModelConfigControl
+                key={`model:${environmentId}:${threadId}`}
                 config={modelConfig}
                 hasSession={Boolean(threadId)}
                 onRefresh={refreshModelConfig}

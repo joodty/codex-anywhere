@@ -129,6 +129,24 @@ test('cold Desktop model reads share the catalog and fall back only to saved met
   assert.equal(savedReads, 1, 'live native settings take precedence');
 });
 
+test('an explicit model-settings click validates and opens the selected native chat without starting a turn', async () => {
+  const calls: any[] = [];
+  const handler = createRequestHandler(createDependencies({ codex: {
+    readSession: async id => { calls.push(['read', id]); return {}; },
+    listModels: async options => { assert.equal(options, undefined); return [{ model: 'catalog-model' }]; },
+    startTurn: async () => assert.fail('settings must not start a task'),
+  }, desktop: { controls: {
+    snapshot: async (...args) => { calls.push(['snapshot', ...args]); },
+    modelConfig: async (id, catalog) => { assert.deepEqual(await catalog, [{ model: 'catalog-model' }]); return { model: 'current', readOnly: false }; },
+  } } }));
+  const result = await handler(request('session.model-config.read', { threadId: 'cold', activate: true }));
+  assert.equal(result.ok, true); assert.equal(result.data.readOnly, false);
+  assert.deepEqual(calls, [['read', 'cold'], ['snapshot', 'cold', true, true]]);
+  const forbidden = createRequestHandler(createDependencies({ codex: { readSession: async () => { throw new Error('workspace_not_allowed'); } },
+    desktop: { controls: { snapshot: async () => assert.fail('must validate before waking a conversation') } } }));
+  assert.equal((await forbidden(request('session.model-config.read', { threadId: 'other', activate: true }))).ok, false);
+});
+
 test('native images are validated before delivery and never resolve arbitrary browser paths', async () => {
   let sent: any;
   const handle = createRequestHandler(createDependencies({ attachments: { nativeInput: async image => {

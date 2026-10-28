@@ -8,7 +8,8 @@ import { ModelConfigControl } from '../web/src/model-config-control.js';
 import { useSessionConfiguration } from '../web/src/session-configuration.js';
 import type { BridgeRequest } from '../web/src/bridge-request-manager.js';
 
-test('an existing session read failure is retryable and never presented as automatic model selection', async () => {
+test('an existing session read failure is retryable and never presented as automatic model selection', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const keys = ['window', 'document', 'IS_REACT_ACT_ENVIRONMENT'] as const;
   const saved = keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   const { window, document } = parseHTML('<html><body><div id="root"></div></body></html>');
@@ -38,7 +39,8 @@ test('an existing session read failure is retryable and never presented as autom
     assert.equal(reads, 2);
     assert.match(document.body.textContent!, /gpt-6-astra/);
     assert.match(document.body.textContent!, /高|High/);
-    assert.equal(document.querySelector<HTMLButtonElement>('button')!.disabled, true);
+    await act(async () => t.mock.timers.tick(800));
+    assert.equal(document.querySelector<HTMLButtonElement>('button')!.disabled, false, 'saved settings keep an explicit reload entry');
   } finally {
     await act(async () => root.unmount());
     for (const [key, descriptor] of saved) {
@@ -54,6 +56,46 @@ test('a new session still shows defaults before any model is selected', () => {
   }));
   assert.match(html, /自动选择|Automatic/);
   assert.doesNotMatch(html, /模型读取失败|Model unavailable/);
+});
+
+test('clicking a saved model prepares live settings without sending a turn and automatically opens the editor', async () => {
+  const keys = ['window', 'document', 'IS_REACT_ACT_ENVIRONMENT'] as const;
+  const saved = keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
+  const { window, document } = parseHTML('<html><body><div id="root"></div></body></html>');
+  for (const [key, value] of [['window', window], ['document', document], ['IS_REACT_ACT_ENVIRONMENT', true]] as const) Object.defineProperty(globalThis, key, { configurable: true, value });
+  const root = createRoot(document.getElementById('root')!);
+  const calls: any[] = [];
+  let complete!: (value: any) => void;
+  const config = { model: 'astra', reasoningEffort: 'high', fastMode: false, readOnly: true, source: 'persisted', serviceTier: null,
+    models: [{ model: 'astra', displayName: 'Astra', supportedReasoningEfforts: [{ reasoningEffort: 'high' }], serviceTiers: [] }] };
+  const request = (async (action: string, payload: any, options: any) => {
+    if (action !== 'session.model-config.read') return { capabilities: {} };
+    calls.push({ payload, timeout: options.timeoutMs });
+    if (payload.activate) return new Promise(resolve => { complete = resolve; });
+    return config;
+  }) as BridgeRequest;
+  function Harness({ threadId = 'cold', desktopState }: { threadId?: string; desktopState?: any }) {
+    const state = useSessionConfiguration({ environmentId: 'pc', online: true, threadId, request, desktopState });
+    return createElement(ModelConfigControl, { config: state.modelConfig, loading: state.modelConfigLoading, disabled: false,
+      hasSession: true, onRefresh: state.refreshModelConfig, onSave: state.saveModelConfig });
+  }
+  try {
+    await act(async () => root.render(createElement(Harness)));
+    assert.equal(document.querySelector<HTMLButtonElement>('.model-config-summary')!.disabled, false);
+    await act(async () => document.querySelector<HTMLButtonElement>('.model-config-summary')!.click());
+    assert.deepEqual(calls, [{ payload: { threadId: 'cold' }, timeout: 12000 }, { payload: { threadId: 'cold', activate: true }, timeout: 30000 }]);
+    assert.match(document.querySelector('[role=status]')!.textContent!, /正在加载模型设置/);
+    assert.equal(document.querySelectorAll('[aria-label="选择模型"]').length, 0, 'cannot edit an unconfirmed saved snapshot');
+    await act(async () => root.render(createElement(Harness, { desktopState: { threadId: 'cold', model: 'astra', reasoningEffort: 'high', serviceTier: 'default' } })));
+    assert.ok(document.querySelector('[aria-label="选择模型"]'), 'a native push can prepare the editor before the request finishes');
+    await act(async () => complete({ ...config, readOnly: false, source: 'desktop', serviceTier: 'default' }));
+    assert.ok(document.querySelector('[aria-label="选择模型"]'), 'the final read response must not close an editor opened by the native push');
+    await act(async () => root.render(createElement(Harness, { threadId: 'different' })));
+    assert.deepEqual(calls.at(-1).payload, { threadId: 'different' }, 'switching chats never activates another thread automatically');
+  } finally {
+    await act(async () => root.unmount());
+    for (const [key, descriptor] of saved) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); }
+  }
 });
 
 async function configurationHarness(t: any, request: BridgeRequest) {

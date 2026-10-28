@@ -35,7 +35,7 @@ export function useSessionConfiguration({
   const [modelState, setModelState] = useState<KeyedValue<SessionModelConfig | null> | null>(null);
   const [modelLoadingKey, setModelLoadingKey] = useState<string | null>(null);
   const [modelReadAttempt, setModelReadAttempt] = useState(0);
-  const refreshModelConfig = useCallback(() => setModelReadAttempt(value => value + 1), []);
+  const modelActivationRef = useRef<string | null>(null);
   const [connectorState, setConnectorState] = useState<KeyedValue<ConnectorStatus | null> | null>(null);
   const [permissionState, setPermissionState] = useState<KeyedValue<SessionPermissionConfig | null> | null>(null);
   const [permissionLoadingKey, setPermissionLoadingKey] = useState<string | null>(null);
@@ -43,11 +43,15 @@ export function useSessionConfiguration({
   const selectionKey = `${environmentId}\0${threadId || ''}`;
   const selectionKeyRef = useRef(selectionKey);
   selectionKeyRef.current = selectionKey;
+  const refreshModelConfig = useCallback(() => {
+    modelActivationRef.current = selectionKeyRef.current;
+    setModelReadAttempt(value => value + 1);
+  }, []);
   const connectorStatus = connectorState?.key === environmentId ? connectorState.value : null;
   const connectorStatusPending = online && connectorState?.key !== environmentId;
   const modelConfig = online && modelState?.key === selectionKey ? modelState.value : null;
   const modelConfigLoading = Boolean(
-    online && threadId && !modelConfig && (modelState?.key !== selectionKey || modelLoadingKey === selectionKey),
+    online && threadId && (modelLoadingKey === selectionKey || (!modelConfig && modelState?.key !== selectionKey)),
   );
   const permissionConfig = online && connectorStatus && permissionState?.key === selectionKey
     ? permissionState.value : null;
@@ -151,13 +155,15 @@ export function useSessionConfiguration({
     const abort = new AbortController();
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const targetKey = selectionKey;
+    const activate = modelActivationRef.current === targetKey;
+    modelActivationRef.current = null;
     setModelLoadingKey(targetKey);
     const isCurrent = () => !disposed && selectionKeyRef.current === targetKey;
     const read = async (attempt: number) => {
       let retry = false;
       try {
-        const config = await request<SessionModelConfig>('session.model-config.read', { threadId },
-          { timeoutMs: 12_000, signal: abort.signal });
+        const config = await request<SessionModelConfig>('session.model-config.read', { threadId, ...(activate ? { activate: true } : {}) },
+          { timeoutMs: activate ? 30_000 : 12_000, signal: abort.signal });
         if (!isCurrent()) return;
         setModelState({ key: targetKey, value: config });
         // A cold catalog can arrive after the lightweight current model.

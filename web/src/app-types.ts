@@ -3,6 +3,8 @@ import type { CurrentProtocol, ProtocolOffer } from '../../src/shared/protocol-c
 import type { TurnProgress } from '../../src/shared/turn-progress';
 import type { ContextUsage } from '../../src/shared/context-compaction';
 import type { PermissionMode } from '../../src/shared/permission-mode';
+import type { ModelOption } from '../../src/shared/model-config';
+export type { ModelOption, ModelConfigDraft } from '../../src/shared/model-config';
 
 export type Session = {
   id: string;
@@ -15,16 +17,6 @@ export type Session = {
   status?: string;
   canStartNewSession?: boolean;
 };
-export type ModelOption = {
-  model: string;
-  displayName: string;
-  description: string;
-  supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
-  defaultReasoningEffort: string;
-  serviceTiers: Array<{ id: string; name: string; description: string }>;
-  defaultServiceTier: string | null;
-  isDefault: boolean;
-};
 export type SessionModelConfig = {
   source?: 'desktop' | 'persisted';
   readOnly?: boolean;
@@ -34,7 +26,6 @@ export type SessionModelConfig = {
   fastMode: boolean;
   models: ModelOption[];
 };
-export type ModelConfigDraft = Pick<SessionModelConfig, 'model' | 'reasoningEffort' | 'fastMode'>;
 export type ConnectorStatus = {
   deviceId: string;
   deviceLabel: string;

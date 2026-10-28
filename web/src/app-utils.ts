@@ -94,6 +94,8 @@ export function friendlyError(error: unknown) {
   if (message === 'session_delivery_mismatch') return t('桌面返回了不同的会话标识，页面已阻止自动切换。请刷新会话列表后重试。', 'Desktop returned a different session ID, so the page blocked the automatic switch. Refresh the session list and try again.');
   if (message === 'model_config_turn_active') return t('当前任务仍在执行，完成后再修改模型配置。', 'Wait for the current run to finish before changing model settings.');
   if (message === 'model_not_available') return t('所选模型当前不可用，请重新选择。', 'The selected model is unavailable. Choose another model.');
+  if (message === 'model_config_invalid') return t('模型设置无效，请重新选择模型和思考强度。', 'Invalid model settings. Select a model and reasoning effort again.');
+  if (message === 'model_config_creation_only') return t('首轮模型设置仅用于新会话；已有会话请使用顶部模型设置。', 'Creation settings apply only to a new chat. Use the model control for an existing chat.');
   if (message === 'reasoning_effort_not_available') return t('当前模型不支持所选思考强度。', 'This model does not support the selected reasoning effort.');
   if (message === 'fast_mode_not_available') return t('当前模型不支持快速模式。', 'Fast mode is not available for this model.');
   if (message === 'permission_mode_turn_active') return t('当前任务仍在执行，完成后再修改权限。', 'Wait for the current run to finish before changing permissions.');

@@ -53,6 +53,7 @@ import {
 } from './turn-diffs.js';
 import { loadSessionModelSettings, saveSessionModelSettings } from './session-model-settings.js';
 import { readDesktopProjects } from './desktop-projects.js';
+import { normalizeModelReasoningEffort, resolveModelSettings, type ModelOption } from '../shared/model-config.js';
 
 const RPC_TIMEOUT_MS = 20_000;
 const SUMMARY_LIMIT = 4_000;
@@ -82,16 +83,6 @@ type PendingRpc = {
   timer: NodeJS.Timeout;
 };
 type SessionMetadata = { cwd: string; path: string; canAcceptDirectInput: boolean };
-type ModelOption = {
-  model: string;
-  displayName: string;
-  description: string;
-  supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
-  defaultReasoningEffort: string;
-  serviceTiers: Array<{ id: string; name: string; description: string }>;
-  defaultServiceTier: string | null;
-  isDefault: boolean;
-};
 type SessionModelConfig = RolloutModelSettings & { fastMode: boolean; models: ModelOption[] };
 type TurnContext = {
   compaction?: { itemId: string; startedAt: number };
@@ -111,6 +102,7 @@ type StartTurnOptions = {
   clientId?: string;
   requestId?: string;
   permissionMode?: unknown;
+  modelConfig?: unknown;
   edit?: { turnId: string; token: string; confirm: boolean };
 };
 
@@ -626,22 +618,10 @@ export class CodexAppServer extends EventEmitter {
     if (!resolvedThreadId) throw new Error('thread_id_required');
     if (this.getActiveTurn(resolvedThreadId)) throw new Error('model_config_turn_active');
     const models = await this.listModels();
-    const requestedModel = String(value.model || '').trim();
-    const model = models.find((candidate) => candidate.model === requestedModel);
-    if (!model) throw new Error('model_not_available');
-    const effort = String(value.reasoningEffort || '').trim();
-    if (!model.supportedReasoningEfforts.some((option) => option.reasoningEffort === effort)) {
-      throw new Error('reasoning_effort_not_available');
-    }
-    const fastMode = value.fastMode === true;
-    const fastTier = model.serviceTiers.find((tier) => /(?:fast|priority)/i.test(`${tier.id} ${tier.name}`));
-    if (fastMode && !fastTier) throw new Error('fast_mode_not_available');
-    const standardTier = model.serviceTiers.find((tier) => tier.id === model.defaultServiceTier)
-      || model.serviceTiers.find((tier) => /default|standard/i.test(`${tier.id} ${tier.name}`));
-    const serviceTier = fastMode ? fastTier!.id : standardTier?.id || model.defaultServiceTier || null;
+    const { model, reasoningEffort: effort, fastMode, serviceTier } = resolveModelSettings(models, value);
     const params = {
       threadId: resolvedThreadId,
-      model: model.model,
+      model,
       effort,
       serviceTier,
     };
@@ -666,7 +646,7 @@ export class CodexAppServer extends EventEmitter {
           await this.rpcRaw('thread/resume', {
             threadId: resolvedThreadId,
             cwd: metadata.cwd,
-            model: model.model,
+            model,
             serviceTier,
             excludeTurns: true,
           });
@@ -684,7 +664,7 @@ export class CodexAppServer extends EventEmitter {
       }
     }
     const settings = {
-      model: model.model,
+      model,
       reasoningEffort: effort,
       serviceTier: serviceTier || 'default',
     };
@@ -895,8 +875,9 @@ export class CodexAppServer extends EventEmitter {
     return models;
   }
 
-  async startTurn({ text, threadId, cwd, clientId, requestId, permissionMode, edit }: StartTurnOptions) {
+  async startTurn({ text, threadId, cwd, clientId, requestId, permissionMode, modelConfig, edit }: StartTurnOptions) {
     let resolvedThreadId = String(threadId || '').trim();
+    if (resolvedThreadId && modelConfig !== undefined) throw new Error('model_config_creation_only');
     // Desktop first turns share a temporary runtime which must fully release
     // its writer before another task can start. Headless tasks remain parallel.
     if (this.releaseRuntimeAfterTurn) {
@@ -946,14 +927,18 @@ export class CodexAppServer extends EventEmitter {
       const appliedPermissionMode = requestedPermissionMode || (isNewThread ? 'ask' : null);
       const permissions = appliedPermissionMode
         ? permissionSettings(appliedPermissionMode, turnCwd, this.networkAccess) : null;
+      const selectedModel = modelConfig === undefined ? null : resolveModelSettings(await this.listModels(), modelConfig);
+      if (this.activeTurns.get(key) !== turnContext || turnContext.cancelRequested) throw new Error('turn_cancelled');
       const threadParams = isNewThread && permissions
         ? { cwd: turnCwd, ...permissions.thread } : { cwd: turnCwd };
+      const creationParams = selectedModel ? { ...threadParams, model: selectedModel.model, serviceTier: selectedModel.serviceTier,
+        config: { ...('config' in threadParams ? threadParams.config : {}), model_reasoning_effort: selectedModel.reasoningEffort } } : threadParams;
       if (resolvedThreadId) {
         const result = await this.resumeThread(resolvedThreadId, threadParams, turnContext);
         const resumedId = result?.thread?.id || result?.id || resolvedThreadId;
         if (resumedId !== resolvedThreadId) throw new Error('session_delivery_mismatch');
       } else {
-        const result = await this.rpcRaw('thread/start', threadParams);
+        const result = await this.rpcRaw('thread/start', creationParams);
         resolvedThreadId = result?.thread?.id || result?.id || result?.threadId;
         if (!resolvedThreadId) throw new Error('codex_did_not_return_thread_id');
         if (result.thread?.path) this.sessionMetadata.set(resolvedThreadId, {
@@ -990,6 +975,7 @@ export class CodexAppServer extends EventEmitter {
         input,
         cwd: turnCwd,
         ...(permissions ? permissions.turn : {}),
+        ...(selectedModel ? { model: selectedModel.model, effort: selectedModel.reasoningEffort, serviceTier: selectedModel.serviceTier } : {}),
       });
       const turnId = String(startResult?.turn?.id || startResult?.turnId || '').trim();
       if (!turnId) throw new Error('codex_did_not_return_turn_id');
@@ -1478,15 +1464,6 @@ function isFastServiceTier(serviceTier: unknown, models: ModelOption[], selected
   return /(?:fast|priority)/i.test(`${tierId} ${tier?.name || ''}`);
 }
 
-function normalizeModelReasoningEffort(model: ModelOption, value: unknown) {
-  const requested = String(value || '').trim();
-  const supported = model.supportedReasoningEfforts.map((option) => option.reasoningEffort);
-  if (supported.includes(requested)) return requested;
-  if (['none', 'minimal'].includes(requested) && supported.includes('low')) return 'low';
-  if (['max', 'ultra'].includes(requested) && supported.includes('xhigh')) return 'xhigh';
-  if (supported.includes(model.defaultReasoningEffort)) return model.defaultReasoningEffort;
-  return supported[0] || '';
-}
 
 function turnDiffKey(threadId: string, turnId: string) {
   return `${threadId}\0${turnId}`;

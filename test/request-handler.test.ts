@@ -147,6 +147,19 @@ test('an explicit model-settings click validates and opens the selected native c
   assert.equal((await forbidden(request('session.model-config.read', { threadId: 'other', activate: true }))).ok, false);
 });
 
+test('catalog discovery does not open a chat and creation forwards one model configuration without applying it to an existing conversation', async () => {
+  let created: any;
+  const handler = createRequestHandler(createDependencies({ codex: {
+    listModels: async () => [{ model: 'available' }], startTurn: async value => { created = value; return { threadId: 'new-chat' }; },
+  }, desktop: { openThread: async () => assert.fail('catalog discovery must not open a conversation') } }));
+  assert.deepEqual((await handler(request('models.list'))).data, { models: [{ model: 'available' }] });
+  assert.equal(created, undefined);
+  const modelConfig = { model: 'available', reasoningEffort: 'high', fastMode: true };
+  assert.equal((await handler(request('turn.start', { text: 'first', cwd: 'project', modelConfig }))).ok, true);
+  assert.deepEqual(created.modelConfig, modelConfig);
+  assert.equal((await handler(request('turn.start', { threadId: 'existing', text: 'next', modelConfig }))).error, 'model_config_creation_only');
+});
+
 test('native images are validated before delivery and never resolve arbitrary browser paths', async () => {
   let sent: any;
   const handle = createRequestHandler(createDependencies({ attachments: { nativeInput: async image => {

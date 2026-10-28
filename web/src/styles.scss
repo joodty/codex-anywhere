@@ -842,6 +842,15 @@ input:not([type='range']):focus, textarea:focus { border-color: $focus !importan
 }
 .new-session-field input { height: 43px; padding: 0 12px; }
 .new-session-field textarea { min-height: 104px; padding: 11px 12px; resize: vertical; line-height: 1.55; }
+.new-session-model {
+  > small { color: #7d899d; font-size: 11px; }
+  > p { margin: 0; color: #ff9ba4; font-size: 12px; }
+  .model-config { width: 100%; }
+  .model-config-summary { height: 34px; font-size: 12px; }
+  .model-config-popover { position: static; width: 100%; margin-top: 8px; transform: none; box-shadow: none; }
+  .custom-select-menu { position: static; width: 100%; min-width: 0; max-height: 220px; margin-top: 6px; }
+  .model-reasoning-slider input[type='range'] { height: 34px; padding: 0; border: 0; background: transparent; }
+}
 .new-session-image-preview {
   min-width: 0;
   display: grid;

@@ -96,6 +96,8 @@ import {
   safeActivityKind,
 } from './live-activity';
 import { ModelConfigControl } from './model-config-control';
+import { useNewSessionModel } from './new-session-model';
+import type { ModelConfigDraft } from '../../src/shared/model-config';
 import { StartupScreen } from './startup-screen';
 import {
   SESSION_PERMISSION_MODE_KEY,
@@ -362,6 +364,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const newSessionAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const newSessionAutoSendRef = useRef(false);
+  const newSessionConfigurationRef = useRef<{ environmentId: string; permissionMode: PermissionMode; modelConfig: ModelConfigDraft } | null>(null);
   const pendingNewRequestRef = useRef<string | null>(null);
   const sendingRef = useRef(new Set<string>());
   const sessionRefreshInFlightRef = useRef<{ environment: string; channel: BrowserSecureChannel | null } | null>(null);
@@ -584,6 +587,10 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     openPermissionSettingsOnDesktop,
   } = useSessionConfiguration({ environmentId, online, threadId, request, desktopState,
     recoveryKey: `${connectionEpoch}:${resumeEpoch}` });
+  const newSessionModel = useNewSessionModel({ environmentId, online, active: newSessionDialogOpen || !threadId, request });
+  const activeModelControl = threadId
+    ? { config: modelConfig, loading: modelConfigLoading, save: saveModelConfig, refresh: refreshModelConfig }
+    : newSessionModel;
   const queueSupported = connectorStatus?.capabilities.messageQueue === true;
   const messageQueue = useMessageQueue({ environmentId, threadId, online, supported: queueSupported, request });
   const queueRefreshRef = useRef(messageQueue.refresh); queueRefreshRef.current = messageQueue.refresh;
@@ -1504,6 +1511,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     threadIdRef.current = nextThreadId;
     setCreatingNewSession(false);
     if (nextThreadId) storeEnvironmentValue(LAST_THREAD_KEY, environmentIdRef.current, nextThreadId);
+    newSessionConfigurationRef.current = null;
     setTimeline([]);
     setResolvedQuestionAnswers({});
     setContextUsage(null);
@@ -1776,6 +1784,9 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       setNewSessionError(t('请输入第一条消息或添加附件。', 'Enter the first message or add an attachment.'));
       return;
     }
+    let selectedModel: ModelConfigDraft;
+    try { selectedModel = newSessionModel.snapshot(); }
+    catch (error) { setNewSessionError(friendlyError(error)); return; }
     const transferredAttachment = newSessionAttachment ? {
       kind: newSessionAttachment.kind,
       file: newSessionAttachment.file,
@@ -1784,6 +1795,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     } : null;
     storeEnvironmentValue(SESSION_PERMISSION_MODE_KEY, environmentIdRef.current, newSessionPermissionMode);
     selectSession(null);
+    newSessionConfigurationRef.current = Object.freeze({ environmentId: environmentIdRef.current, permissionMode: newSessionPermissionMode, modelConfig: selectedModel });
     setCreatingNewSession(true);
     writeLocal('personal.draft.' + JSON.stringify([environmentIdRef.current, 'new']), text);
     setPendingAttachment(transferredAttachment);
@@ -1791,7 +1803,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     setNewSessionError('');
     closeNewSessionDialog();
     newSessionAutoSendRef.current = true;
-  }, [closeNewSessionDialog, newSessionCwd, newSessionAttachment, newSessionPrompt, newSessionPermissionMode, online, uploading, connectorStatus?.capabilities.fullAccess, selectSession, setNewSessionAttachment, setPendingAttachment]);
+  }, [closeNewSessionDialog, newSessionCwd, newSessionAttachment, newSessionPrompt, newSessionPermissionMode, newSessionModel.snapshot, online, uploading, connectorStatus?.capabilities.fullAccess, selectSession, setNewSessionAttachment, setPendingAttachment]);
 
   const sendTurn = useCallback(async (questionReplies?: QuestionReply[], intent: 'auto' | 'immediate' = 'auto') => {
     // A question response is independent of the message/attachment draft.
@@ -1816,9 +1828,19 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       || (steering && Boolean(attachment))
     ) return;
     const isExistingSession = Boolean(targetThreadId);
+    let creationConfig = newSessionConfigurationRef.current;
+    if (!isExistingSession) {
+      try {
+        creationConfig = creationConfig?.environmentId === environmentIdRef.current ? creationConfig : {
+          environmentId: environmentIdRef.current,
+          permissionMode: normalizePermissionMode(loadEnvironmentValue(SESSION_PERMISSION_MODE_KEY, environmentIdRef.current)),
+          modelConfig: newSessionModel.snapshot(),
+        };
+      } catch (error) { reportTimelineError(error); return; }
+    }
     const selectedPermissionMode = isExistingSession
       ? permissionConfig?.mode
-      : normalizePermissionMode(loadEnvironmentValue(SESSION_PERMISSION_MODE_KEY, environmentIdRef.current));
+      : creationConfig!.permissionMode;
     const selectionVersion = selectedRequestRef.current;
     const projectCwd = newSessionCwd.trim();
     if (!isExistingSession && !projectCwd) {
@@ -1956,6 +1978,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
         ...(steering ? {} : {
           cwd: isExistingSession ? '' : projectCwd,
           ...(selectedPermissionMode && selectedPermissionMode !== 'custom' ? { permissionMode: selectedPermissionMode } : {}),
+          ...(!isExistingSession ? { modelConfig: creationConfig!.modelConfig } : {}),
           ...(directDesktopDelivery ? { preferDesktop: true } : {}),
         }),
       }, { onRequestId: requestId => {
@@ -1975,6 +1998,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
       if (data.threadId) {
         if (boundPaths.length) void request('attachment.bind', { threadId: data.threadId, paths: boundPaths }).catch(() => reportTimelineError(new Error('附件已保存，但会话关联未完成；原文件仍保留在本机。')));
         if (!isExistingSession) {
+          if (newSessionConfigurationRef.current === creationConfig) newSessionConfigurationRef.current = null;
           const createdSession = {
             id: data.threadId,
             title: visibleText.split(/\r?\n/, 1)[0]?.slice(0, 80) || t('新会话', 'New session'),
@@ -2061,7 +2085,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
     }
   }, [
     addTimeline, connectorStatus, executionState, modelConfig, newSessionCwd, ownedTurnThreadId, pendingAttachments, imageQuality,
-    permissionConfig, prompt, threadId, queueSupported, desktopState, setPendingAttachments, setPrompt,
+    permissionConfig, prompt, threadId, queueSupported, desktopState, setPendingAttachments, setPrompt, newSessionModel.snapshot,
     loadHistory, refreshSessions, rememberAttachment, rememberImage, reportTimelineError, request, resetExecution, running,
     updateExecution, updateSessionAttention, uploading,
   ]);
@@ -2428,6 +2452,13 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
                   onChange={async (mode) => { setNewSessionPermissionMode(mode); setNewSessionError(''); }}
                 />
               </div>
+              <div className="new-session-field new-session-model">
+                <span>{t('模型与思考强度', 'Model and reasoning effort')}</span>
+                <ModelConfigControl key={`new-model:${environmentId}`} config={newSessionModel.config}
+                  loading={newSessionModel.loading} disabled={!online} hasSession onSave={newSessionModel.save} onRefresh={newSessionModel.refresh} />
+                <small>{t('从第一条消息生效，仅用于新会话。', 'Applies from the first message of this new chat.')}</small>
+                {newSessionModel.error && <p role="alert">{newSessionModel.error}</p>}
+              </div>
               {newSessionAttachment && (
                 <div className="new-session-image-preview">
                   <>{newSessionAttachment.kind === 'image' ? <img src={newSessionAttachment.previewUrl} alt="" /> : <span className="attachment-file-icon" aria-hidden="true">▤</span>}</>
@@ -2455,7 +2486,7 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
               <button
                 className="primary-action"
                 type="button"
-                disabled={!online || uploading || !newSessionCwd.trim() || (!newSessionPrompt.trim() && !newSessionAttachment)}
+                disabled={!online || uploading || newSessionModel.loading || !newSessionModel.config || !newSessionCwd.trim() || (!newSessionPrompt.trim() && !newSessionAttachment)}
                 onClick={submitNewSession}
               >
                 {t('创建并发送', 'Create and send')}
@@ -2551,12 +2582,12 @@ export default function App({ initialPairingInput = null }: { initialPairingInpu
             <div className="conversation-controls">
               <ModelConfigControl
                 key={`model:${environmentId}:${threadId}`}
-                config={modelConfig}
+                config={activeModelControl.config}
                 hasSession={Boolean(threadId)}
-                onRefresh={refreshModelConfig}
-                loading={modelConfigLoading}
+                onRefresh={activeModelControl.refresh}
+                loading={activeModelControl.loading}
                 disabled={!online || executionActive}
-                onSave={saveModelConfig}
+                onSave={activeModelControl.save}
               />
               <PermissionModeControl
                 key={`permission:${environmentId}:${threadId}`}

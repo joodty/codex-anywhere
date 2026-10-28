@@ -198,6 +198,10 @@ async function dispatchAction({
         ...(fileUploads ? { fileUpload: true } : {}), ...(browser ? { browserControl: true, browserGrantReplacement: true } : {}) },
     };
   }
+  if (action === 'models.list') {
+    if (!codex.listModels) throw new Error('desktop_input_unsupported');
+    return { models: await codex.listModels() };
+  }
   if (action.startsWith('queue.')) {
     if (!queue || mode !== 'desktop') throw new Error('queue_unsupported');
     const threadId = String(payload.threadId || '');
@@ -474,6 +478,7 @@ async function startTurn({
   codex, desktop, mode, payload, clientId, requestId, browser, attachments,
 }: Pick<DispatchContext, 'codex' | 'desktop' | 'mode' | 'payload' | 'clientId' | 'requestId' | 'browser' | 'attachments'>) {
   const threadId = String(payload.threadId || '').trim();
+  if (threadId && payload.modelConfig !== undefined) throw new Error('model_config_creation_only');
   if (!threadId || mode === 'headless') {
     // A reloaded/reconnected browser may have missed turn.started. Resolve
     // delivery from the connector's ownership, never from browser hints.

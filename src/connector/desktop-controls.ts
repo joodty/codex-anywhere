@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { DesktopUserInput, classifyDesktopError } from './desktop-user-input.js';
 import { measureOperation } from './operation-metrics.js';
 import { desktopPermissionConfig, desktopPermissionSettings, type PermissionCapabilities } from './desktop-permissions.js';
+import { resolveModelSettings, type ModelOption } from '../shared/model-config.js';
 
 type Value = Record<string, any>;
 function mutationError(error: unknown) {
@@ -150,17 +151,12 @@ export class DesktopControls {
       source: 'desktop' as const, readOnly: !current || !models.length, models };
   }
   async updateModel(threadId: string, value: Value, models: Value[]) {
-    const model = models.find(m => m.model === value.model);
-    if (!model) throw new Error('model_not_available');
-    if (!model.supportedReasoningEfforts.some((r: Value) => r.reasoningEffort === value.reasoningEffort)) throw new Error('reasoning_effort_not_available');
-    const tier = value.fastMode === true ? model.serviceTiers.find((t: Value) => /fast|priority/i.test(`${t.id} ${t.name}`))
-      : model.serviceTiers.find((t: Value) => t.id === model.defaultServiceTier) || model.serviceTiers.find((t: Value) => /default|standard/i.test(`${t.id} ${t.name}`)) || { id: 'default' };
-    if (!tier) throw new Error('fast_mode_not_available');
+    const settings = resolveModelSettings(models as ModelOption[], value);
     const before = await this.snapshot(threadId, true, false);
     if (before.summary.status === 'active') throw new Error('model_config_turn_active');
     try {
       const result = await this.input.pipe.request('thread-follower-update-thread-settings', {
-        conversationId: threadId, threadSettings: { model: model.model, effort: value.reasoningEffort, serviceTier: tier.id },
+        conversationId: threadId, threadSettings: { model: settings.model, effort: settings.reasoningEffort, serviceTier: settings.serviceTier },
         condition: { ifModelEquals: before.state.latestModel, ifEffortEquals: before.state.latestReasoningEffort },
       }, 15000, before.owner);
       if (result.result?.applied !== true) throw new Error('desktop_settings_changed');
@@ -170,10 +166,10 @@ export class DesktopControls {
     }
     await this.input.state.waitFor(threadId, before.owner, state => {
       const summary = desktopSummary(state, before.owner);
-      return summary.model === model.model && summary.reasoningEffort === value.reasoningEffort && summary.serviceTier === tier.id;
+      return summary.model === settings.model && summary.reasoningEffort === settings.reasoningEffort && summary.serviceTier === settings.serviceTier;
     }).catch(() => { throw new Error('desktop_settings_unconfirmed'); });
     const after = await this.modelConfig(threadId, models);
-    if (after.model !== model.model || after.reasoningEffort !== value.reasoningEffort || after.serviceTier !== tier.id) throw new Error('desktop_settings_changed');
+    if (after.model !== settings.model || after.reasoningEffort !== settings.reasoningEffort || after.serviceTier !== settings.serviceTier) throw new Error('desktop_settings_changed');
     return after;
   }
 
